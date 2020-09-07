@@ -1,0 +1,10 @@
+#cloudpickle==1.4.1  # Fixes bug with type hints for Python 3.6
+coloredlogs
+gym
+numpy
+pandas
+ray[rllib]
+tensorboardX
+tensorflow-gpu
+tensorflow-probability
+xvfbwrapper

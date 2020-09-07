@@ -1,0 +1,6 @@
+*.egg-info
+exs/
+notes.txt
+*.pyc
+results/
+venv/
