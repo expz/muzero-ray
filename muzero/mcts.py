@@ -7,11 +7,6 @@ import tensorflow_probability as tfp
 import numpy as np
 
 
-#tf.debugging.set_log_device_placement(True)
-# Restrict to use first GPU
-gpus = tf.config.experimental.list_physical_devices('GPU')
-tf.config.experimental.set_visible_devices(gpus[0], 'GPU')
-
 class Node:
     def __init__(self, action, reward, state, mcts, parent):
         action_space_size = mcts.model.action_space_size

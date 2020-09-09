@@ -31,10 +31,12 @@ def main(args):
   coloredlogs.install(level=args.loglevel.upper())
 
   config = {
+      'env': 'BreakoutNoFrameskip-MuZero-v1',
       'num_workers': 1,
       'log_level': 'DEBUG',
       'learning_starts': 0,
-      'env': 'BreakoutNoFrameskip-MuZero-v1',
+      'train_batch_size': 256,
+      'timesteps_per_iteration': 25000,
   }
   config = update_config(ATARI_DEFAULT_CONFIG, config)
 
@@ -45,7 +47,8 @@ def main(args):
   except:
       pass
 
-  ray.init(local_mode=True)
+  #ray.init(local_mode=True)
+  ray.init(num_cpus=6, num_gpus=1)
   try:
     tune.run(
       MuZeroTrainer,
