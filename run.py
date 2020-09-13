@@ -18,13 +18,13 @@ log = logging.getLogger(__name__)
 
 
 def update_config(old_config, new_config):
-  config = {**old_config}
-  for k, v in new_config.items():
-    if k in config and isinstance(v, dict):
-      config[k] = update_config(config[k], v)
-    else:
-      config[k] = v
-  return config
+    config = {**old_config}
+    for k, v in new_config.items():
+        if k in config and isinstance(v, dict):
+            config[k] = update_config(config[k], v)
+        else:
+            config[k] = v
+    return config
 
 
 def main(args):
@@ -33,10 +33,11 @@ def main(args):
   config = {
       'env': 'BreakoutNoFrameskip-MuZero-v1',
       'num_workers': 1,
-      'log_level': 'DEBUG',
+      'log_level': 'WARNING',
       'learning_starts': 0,
-      'train_batch_size': 256,
+      'train_batch_size': 32,
       'timesteps_per_iteration': 25000,
+      'buffer_size': 8000,
   }
   config = update_config(ATARI_DEFAULT_CONFIG, config)
 
@@ -50,44 +51,45 @@ def main(args):
   #ray.init(local_mode=True)
   ray.init(num_cpus=6, num_gpus=1)
   try:
-    tune.run(
-      MuZeroTrainer,
-      local_dir='results',
-      name='breakout',
-      stop={'training_iteration': 4},
-      config=config,
-      checkpoint_at_end=True)
+      tune.run(
+          MuZeroTrainer,
+          local_dir='results',
+          name='breakout',
+          stop={'training_iteration': 4000},
+          config=config,
+          checkpoint_freq=100,
+          checkpoint_at_end=True)
   finally:
-    ray.shutdown()
+      ray.shutdown()
 
 
 if __name__ == "__main__":
-  parser = argparse.ArgumentParser(
-    description='train a MuZero algorithm on a specified game'
-  )
-  parser.add_argument(
-    'game',
-    type=str,
-    choices=['tictactoe', 'atari'],
-    help='the game to learn'
-  )
-  parser.add_argument(
-    '--outfile',
-    type=str,
-    help='path where to save the trained model'
-  )
-  parser.add_argument(
-    '--chk',
-    type=str,
-    help='path to checkpoint of model to load before training'
-  )
-  parser.add_argument(
-    '--loglevel',
-    type=str,
-    choices=['debug', 'info', 'warning', 'error', 'critical'],
-    default='info',
-    help='level of log to print'
-  )
-  args = parser.parse_args()
+    parser = argparse.ArgumentParser(
+        description='train a MuZero algorithm on a specified game'
+    )
+    parser.add_argument(
+        'game',
+        type=str,
+        choices=['tictactoe', 'atari'],
+        help='the game to learn'
+    )
+    parser.add_argument(
+        '--outfile',
+        type=str,
+        help='path where to save the trained model'
+    )
+    parser.add_argument(
+        '--chk',
+        type=str,
+        help='path to checkpoint of model to load before training'
+    )
+    parser.add_argument(
+        '--loglevel',
+        type=str,
+        choices=['debug', 'info', 'warning', 'error', 'critical'],
+        default='info',
+        help='level of log to print'
+    )
+    args = parser.parse_args()
 
-  main(args)
+    main(args)
