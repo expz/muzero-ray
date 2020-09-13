@@ -150,33 +150,13 @@ class MuZeroTFModelV2(TFModelV2):
     
     def _encode_atari_actions(self, actions: TensorType) -> TensorType:
         """Create one frame per action and encode using one hot"""
-        #print('actions shape', actions.shape)
-        #print('state shape', self.state_shape)
-        #print('num outputs', self.num_outputs)
         channel_shape = self.state_shape[:-1].as_list()
-        #print('channel shape', channel_shape)
         actions = tf.reshape(actions, actions.shape + [1] * len(channel_shape))
-        #print('new actions shape', actions.shape)
         tile = tf.tile(actions, tf.constant([1] + channel_shape))
-        #print('tile shape', tile.shape)
         one_hot = tf.one_hot(tile, self.num_outputs)
-        #print('one hot shape', one_hot.shape)
         return one_hot
 
-    """
-    def _pad_obs(self, obs, N):
-        rem = (N - (obs.shape[0] % N)) % N
-        print('REM:', rem, 'OBS:', obs.shape)
-        if rem > 0:
-            random_obs = tf.expand_dims(self.obs_space.sample(), axis=0)
-            random_obs = tf.repeat(random_obs, repeats=rem, axis=0)
-            print('RANDOM', random_obs.shape)
-            obs = tf.concat([obs, random_obs], axis=0)
-        return obs
-    """
-    
     def value_function(self) -> TensorType:
-        #print('in value function')
         return self._value_out
 
     @staticmethod
@@ -196,12 +176,18 @@ class MuZeroTFModelV2(TFModelV2):
         a == lub(t) - t
         b == t - glb(t)
         """
+        #print('t shape:', t.shape)
         shape = t.shape + (2 * bound + 1,)
         t_clipped = tf.clip_by_value(t, -bound, bound)
-        indices_l = tf.clip_by_value(tf.cast(t_clipped, tf.int32), -bound, bound)
+        # Negative numbers round toward zero (up). Make them non-negative to fix.
+        indices_l = tf.clip_by_value(
+            tf.cast(t_clipped + tf.cast(tf.identity(bound), dtype=t.dtype), tf.int32),
+            -bound,
+            bound) - tf.identity(bound)
         indices_u = tf.clip_by_value(indices_l + tf.identity(1), -bound, bound)
-        dtype = t_clipped.dtype
+
         # TODO: precompute tile and repeat
+        dtype = t_clipped.dtype
         left = tf.reshape(tf.cast(indices_u, dtype) - t_clipped, (-1,))
         right = tf.reshape(t_clipped - tf.cast(indices_l, dtype), (-1,))
         
@@ -212,28 +198,10 @@ class MuZeroTFModelV2(TFModelV2):
                 tf.reshape(u, (-1,))
             ]))
         
-        indices_l = zip_with_indices(indices_l, t.shape[0], t.shape[1])
-        indices_u = zip_with_indices(indices_u, t.shape[0], t.shape[1])
-        #print('indicies l', indices_l.shape)
+        indices_l = zip_with_indices(indices_l + bound, t.shape[0], t.shape[1])
+        indices_u = zip_with_indices(indices_u + bound, t.shape[0], t.shape[1])
+        #print('indices l shape', indices_l.shape)
         return tf.scatter_nd(indices_l, left, shape) + tf.scatter_nd(indices_u, right, shape)
-    
-    """
-    def preprocess_obs(self, obs: TensorType, is_training: bool):
-        F = self.train_n_channels if is_training else self.input_steps
-        #print('F:', F)
-        obs = self._pad_obs(obs, F)
-        #print('OBS SHAPE:', obs.shape)
-        
-        n_channels = obs.shape[-1]
-        new_shape = (-1, F) + tuple(obs.shape[1:])
-        perm = (0,) + tuple(range(2, len(new_shape))) + (1,)
-        final_shape = (-1,) + tuple(obs.shape[1:-1]) + (self.input_steps * n_channels,)
-        
-        obs = tf.reshape(obs, new_shape)[:, :self.input_steps]
-        obs = tf.transpose(obs, perm=perm)
-        obs = tf.reshape(obs, final_shape)
-        return obs
-    """
     
     def forward(self, input_dict: Dict[str, Any], state: List[Any], seq_lens: Any) -> Tuple[TensorType, List[Any]]:
         """
@@ -273,8 +241,6 @@ class MuZeroTFModelV2(TFModelV2):
             # For Atari, obs should be of size (batch_size, screen_x, screen_y, self.input_steps*4).
             hidden_state = self.representation(obs)
             value, policy = self.prediction(hidden_state)
-            #print('value shape:', value.shape)
-            #print('policy shape:', policy.shape)
         return value, policy
         
     def representation(self, obs_batch: TensorType) -> TensorType:
@@ -289,5 +255,4 @@ class MuZeroTFModelV2(TFModelV2):
     def dynamics(self, hidden_state: TensorType, action_batch: TensorType) -> Tuple[TensorType, TensorType]:
         """action should be of shape (batch_size) + self.state_shape[:-1]"""
         action_t = self._encode_atari_actions(action_batch)
-        #print('action_t:', action_t.shape, 'hidden_state:', hidden_state.shape)
         return self.dynamics_net((hidden_state, action_t))

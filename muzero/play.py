@@ -7,7 +7,6 @@ import pyglet
 import time
 from xvfbwrapper import Xvfb
 
-
 def jupyter_play(env, agent, steps=1000):
   from IPython import display
 
@@ -41,7 +40,7 @@ def jupyter_play(env, agent, steps=1000):
 def mp4_play(env, agent, steps=1000):
   policy = agent.get_policy()
 
-  env = wrappers.Monitor(env, "./gym-results", force=True, video_callable=lambda x: True)    
+  env = gym.wrappers.Monitor(env, "./gym-results", force=True, video_callable=lambda x: True)    
   observation = env.reset()
 
   action = 0

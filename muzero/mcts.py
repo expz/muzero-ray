@@ -104,7 +104,7 @@ class Node:
 
     def backup(self, value):
         current = self
-        while current.parent is not None:
+        while current is not None:
             self.mcts.update_q_bounds(value)
             current.visit_count += 1
             current.total_value += value

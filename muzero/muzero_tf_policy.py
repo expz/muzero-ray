@@ -1,6 +1,7 @@
 import gym
 import numpy as np
 from ray.rllib.agents.trainer import with_common_config
+from ray.rllib.evaluation.postprocessing import Postprocessing
 from ray.rllib.models.modelv2 import ModelV2
 from ray.rllib.models.tf.recurrent_net import RecurrentNetwork
 import ray.rllib.models.tf.tf_action_dist as rllib_tf_dist
@@ -16,8 +17,11 @@ import tensorflow_probability as tfp
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from muzero.mcts import MCTS
+from muzero.muzero import ATARI_DEFAULT_CONFIG
 from muzero.muzero_tf_model import MuZeroTFModelV2
 
+
+PRIO_WEIGHTS = 'weights'
 
 def make_mu_zero_model(policy: Policy,
                        obs_space: gym.spaces.Space,
@@ -166,16 +170,6 @@ def action_distribution_fn(policy: Policy, model: ModelV2, obs: TensorType, expl
     }
     return action_probs, rllib_tf_dist.Categorical, []
 
-def vf_preds_fetches(policy):
-    """Adds value function outputs to experience sample batches."""
-    return {
-        SampleBatch.VF_PREDS: policy.model.value_function(),
-    }
-
-from ray.rllib.evaluation.postprocessing import Postprocessing
-
-    
-
 def mu_zero_postprocess(
         policy,
         sample_batch,
@@ -238,6 +232,9 @@ def mu_zero_postprocess(
     sample_batch['rollout_values'] = rollout(value_target)
     sample_batch['rollout_rewards'] = rollout(rewards)
     sample_batch['rollout_policies'] = rollout(action_dist_inputs, default = [0] * len(action_dist_inputs[0]))
+
+    if PRIO_WEIGHTS not in sample_batch:
+        sample_batch[PRIO_WEIGHTS] = np.ones_like(sample_batch[SampleBatch.REWARDS])
     return sample_batch
 
 def before_init(policy, obs_space, action_space, config):
@@ -249,9 +246,48 @@ def before_init(policy, obs_space, action_space, config):
 
 
 def before_loss_init(policy, obs_space, action_space, config):
+    ComputeTDErrorMixin.__init__(policy, obs_space, action_space, config)
     ValueNetworkMixin.__init__(policy, obs_space, action_space, config)
     MCTSMixin.__init__(policy, obs_space, action_space, config)
 
+def clip_gradients(policy, optimizer, loss):
+    grads_and_vars = optimizer.compute_gradients(
+        loss, policy.model.trainable_variables())
+    grads = [g for (g, v) in grads_and_vars]
+    grads, _ = tf.clip_by_global_norm(grads, policy.config["grad_clip"])
+    clipped_grads = list(zip(grads, policy.model.trainable_variables()))
+    return clipped_grads
+
+def vf_preds_fetches(policy):
+    """Adds value function outputs to experience sample batches."""
+    return {
+        SampleBatch.VF_PREDS: policy.model.value_function(),
+    }
+
+def td_error_fetches(policy):
+    return {
+        'td_error': policy.loss_obj.total_loss,
+    }
+
+class ComputeTDErrorMixin:
+    def __init__(self, obs_space, action_space, config):
+        @make_tf_callable(self.get_session(), dynamic_shape=True)
+        def compute_td_error(obs_t, act_t, rew_t, obs_tp1, done_mask,
+                             importance_weights):
+            # Do forward pass on loss to update td error attribute
+            mu_zero_loss(
+                self, self.model, rllib_tf_dist.Categorical, {
+                    SampleBatch.CUR_OBS: obs_t,
+                    SampleBatch.ACTIONS: act_t,
+                    SampleBatch.REWARDS: rew_t,
+                    SampleBatch.NEXT_OBS: obs_tp1,
+                    SampleBatch.DONES: done_mask,
+                    PRIO_WEIGHTS: importance_weights,
+                })
+
+            return self.q_loss.total_loss
+
+        self.compute_td_error = compute_td_error
 
 class ValueNetworkMixin:
     def __init__(self, obs_space, action_space, config):
@@ -274,12 +310,19 @@ class MCTSMixin:
     
        
 MuZeroTFPolicy = build_tf_policy('MuZeroTFPolicy',
+                                 get_default_config=lambda: ATARI_DEFAULT_CONFIG,
                                  loss_fn=mu_zero_loss,
                                  stats_fn=mu_zero_stats,
                                  #before_init=before_init,
                                  before_loss_init=before_loss_init,
+                                 gradients_fn=clip_gradients,
                                  postprocess_fn=mu_zero_postprocess,
                                  extra_action_fetches_fn=vf_preds_fetches,
+                                 extra_learn_fetches_fn=td_error_fetches,
                                  make_model=make_mu_zero_model,
                                  action_distribution_fn=action_distribution_fn,
-                                 mixins=[ValueNetworkMixin, MCTSMixin])
+                                 mixins=[
+                                     ValueNetworkMixin,
+                                     MCTSMixin,
+                                     ComputeTDErrorMixin
+                                 ])

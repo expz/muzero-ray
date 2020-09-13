@@ -3,6 +3,7 @@ coloredlogs
 gym
 numpy
 pandas
+pillow
 ray[rllib]
 tensorboardX
 tensorflow-gpu
