@@ -2,5 +2,6 @@
 exs/
 notes.txt
 *.pyc
+.vscode/
 results/
 venv/
