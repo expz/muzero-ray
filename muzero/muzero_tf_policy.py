@@ -65,9 +65,12 @@ class MuZeroLoss:
                  value_preds,
                  policy_preds):
         self.mean_entropy = tf.identity(0.)
-        for policy_pred in tf.unstack(policy_preds):
+        # loop through time steps
+        for policy_pred in policy_preds:
             action_dist = dist_class(policy_pred, model)
             self.mean_entropy += tf.reduce_mean(action_dist.entropy())
+        # once done with looping, convert it to a tensor
+        policy_preds = tf.transpose(tf.convert_to_tensor(policy_preds), perm=(1, 0, 2))
 
         K = int(reward_targets.shape[1])
         w = [1.]
@@ -103,7 +106,7 @@ def mu_zero_loss(policy,
         value, action_probs = model.prediction(hidden_state)
         # TODO: check whether this is supposed to be the actions from the train batch
         categorical = tfp.distributions.Categorical(probs=action_probs)
-        actions = tf.transpose(categorical.sample(len(obs)))[0]
+        actions = categorical.sample()
         value_preds.append(value)
         policy_preds.append(action_probs)
         hidden_state, reward = model.dynamics(hidden_state, actions)
@@ -111,7 +114,6 @@ def mu_zero_loss(policy,
 
     reward_preds = tf.transpose(tf.convert_to_tensor(reward_preds), perm=(1, 0, 2))
     value_preds = tf.transpose(tf.convert_to_tensor(value_preds), perm=(1, 0, 2))
-    policy_preds = tf.transpose(tf.convert_to_tensor(policy_preds), perm=(1, 0, 2))
 
     if model.action_type == MuZeroTFModelV2.ATARI:
         value_loss_fn = atari_value_loss
@@ -150,20 +152,31 @@ def mu_zero_stats(policy, train_batch: SampleBatch) -> Dict[str, TensorType]:
     }
 
 
-def action_distribution_fn(policy: Policy, model: ModelV2, obs: TensorType, explore=None, timestep=None, is_training=False):
+def action_distribution_fn(
+    policy: Policy,
+    model: MuZeroTFModelV2,
+    obs_batch: TensorType,
+    state_batches=None,
+    seq_lens=None,
+    prev_action_batch=None,
+    prev_reward_batch=None,
+    explore=None,
+    timestep=None,
+    is_training=False):
     """
     Returns
     distribution inputs (parameters),
     dist-class to generate an action distribution from,
     internal state outputs (or empty list if N/A)
     """
-    value, action_probs = model.forward_with_value(obs, is_training)
+    value, action_probs = model.forward_with_value(obs_batch, is_training)
     action_dist = rllib_tf_dist.Categorical(tf.convert_to_tensor(action_probs), model)
     actions, logp = policy.exploration.get_exploration_action(
         action_distribution=action_dist,
         timestep=timestep,
         explore=explore
     )
+    t = tf.gather(action_probs, actions, axis=1, batch_dims=1)
     policy.last_extra_fetches = {
         SampleBatch.ACTION_PROB: tf.gather(action_probs, actions, axis=1, batch_dims=1),
         SampleBatch.VF_PREDS: tf.convert_to_tensor(value)
@@ -188,7 +201,8 @@ def mu_zero_postprocess(
     """
     
     rewards = sample_batch[SampleBatch.REWARDS]
-    vf_preds = tf.reshape(policy.model.expectation(sample_batch[SampleBatch.VF_PREDS], policy.model.value_basis), (-1,))
+    vf_preds = policy.model.expectation_np(sample_batch[SampleBatch.VF_PREDS], policy.model.value_basis_np)
+    vf_preds = np.reshape(vf_preds, (-1,))
     
     # This calculates
     #   t[0:N] + gamma * t[1:N + 1] + ... + gamma^n_step * u
@@ -253,9 +267,13 @@ def before_loss_init(policy, obs_space, action_space, config):
 def clip_gradients(policy, optimizer, loss):
     grads_and_vars = optimizer.compute_gradients(
         loss, policy.model.trainable_variables())
-    grads = [g for (g, v) in grads_and_vars]
-    grads, _ = tf.clip_by_global_norm(grads, policy.config["grad_clip"])
-    clipped_grads = list(zip(grads, policy.model.trainable_variables()))
+    b = policy.config['grad_clip']
+    if b is not None:
+        grads = [g for (g, v) in grads_and_vars]
+        grads, _ = tf.clip_by_global_norm(grads, b)
+        clipped_grads = list(zip(grads, policy.model.trainable_variables()))
+    else:
+        clipped_grads = grads_and_vars
     return clipped_grads
 
 def vf_preds_fetches(policy):

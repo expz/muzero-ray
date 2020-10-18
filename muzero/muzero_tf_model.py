@@ -34,7 +34,7 @@ class MuZeroTFModelV2(TFModelV2):
         self.config = model_config
         
         self.input_shape = obs_space.shape
-        obs_input = tf.keras.Input(self.input_shape, batch_size=model_config['train_batch_size'])
+        obs_input = tf.keras.Input(self.input_shape)
         state_output = self._build_model(obs_input, model_config['conv_filters']['representation'])
         self.representation_net = tf.keras.Model(obs_input, [state_output])
 
@@ -51,14 +51,14 @@ class MuZeroTFModelV2(TFModelV2):
         self.is_reward_categorical = model_config['reward_type'] == 'categorical'
         self.is_value_categorical = model_config['value_type'] == 'categorical'
         
-        state_input = tf.keras.Input(self.state_shape, batch_size=model_config['train_batch_size'])
-        action_input = tf.keras.Input(self.action_shape, batch_size=model_config['train_batch_size'])
+        state_input = tf.keras.Input(self.state_shape)
+        action_input = tf.keras.Input(self.action_shape)
         dynamics_input = tf.keras.layers.Concatenate(axis=-1)([state_input, action_input])
         next_state_output = self._build_model(dynamics_input, model_config['conv_filters']['dynamics'])
         reward_output = self._scalar_head(next_state_output, model_config, 'reward')
         self.dynamics_net = tf.keras.Model([state_input, action_input], [next_state_output, reward_output])
         
-        prediction_input = tf.keras.Input(self.state_shape, batch_size=model_config['train_batch_size'])
+        prediction_input = tf.keras.Input(self.state_shape)
         prediction_output = self._build_model(prediction_input, model_config['conv_filters']['prediction'])
         value_output = self._scalar_head(prediction_output, model_config, 'value')
         policy_output = self._policy_head(prediction_output, model_config)
@@ -66,8 +66,10 @@ class MuZeroTFModelV2(TFModelV2):
         
         if model_config['value_type'] == 'categorical':
             self.value_basis = tf.transpose(tf.reshape(tf.range(-model_config['value_max'], model_config['value_max'] + 1, 1.0), (1, -1)))
+            self.value_basis_np = np.transpose(np.reshape(np.arange(-model_config['value_max'], model_config['value_max'] + 1, 1.0), (1, -1)))
         if model_config['reward_type'] == 'categorical':
             self.reward_basis = tf.transpose(tf.reshape(tf.range(-model_config['reward_max'], model_config['reward_max'] + 1, 1.0), (1, -1)))
+            self.reward_basis_np = np.transpose(np.reshape(np.arange(-model_config['reward_max'], model_config['reward_max'] + 1, 1.0), (1, -1)))
     
         self.input_steps = model_config['input_steps']
         self.K = model_config['loss_steps']
@@ -151,7 +153,7 @@ class MuZeroTFModelV2(TFModelV2):
     def _encode_atari_actions(self, actions: TensorType) -> TensorType:
         """Create one frame per action and encode using one hot"""
         channel_shape = self.state_shape[:-1].as_list()
-        actions = tf.reshape(actions, actions.shape + [1] * len(channel_shape))
+        actions = tf.reshape(actions, tf.concat([tf.shape(actions), tf.convert_to_tensor([1] * len(channel_shape))], 0))
         tile = tf.tile(actions, tf.constant([1] + channel_shape))
         one_hot = tf.one_hot(tile, self.num_outputs)
         return one_hot
@@ -160,9 +162,13 @@ class MuZeroTFModelV2(TFModelV2):
         return self._value_out
 
     @staticmethod
-    def expectation(categorical: TensorType, basis: TensorType) -> float:
+    def expectation(categorical: TensorType, basis: TensorType) -> TensorType:
         return tf.tensordot(categorical, basis, axes=[[1], [0]])
     
+    @staticmethod
+    def expectation_np(categorical: np.ndarray, basis: np.ndarray) -> np.ndarray:
+        return np.tensordot(categorical, basis, axes=[[1], [0]])
+
     @staticmethod
     def scalar_to_categorical(t: TensorType, bound: int) -> TensorType:
         """
@@ -177,7 +183,7 @@ class MuZeroTFModelV2(TFModelV2):
         b == t - glb(t)
         """
         #print('t shape:', t.shape)
-        shape = t.shape + (2 * bound + 1,)
+        shape = tf.concat([tf.shape(t), tf.constant([2 * bound + 1])], 0)
         t_clipped = tf.clip_by_value(t, -bound, bound)
         # Negative numbers round toward zero (up). Make them non-negative to fix.
         indices_l = tf.clip_by_value(
@@ -190,17 +196,16 @@ class MuZeroTFModelV2(TFModelV2):
         dtype = t_clipped.dtype
         left = tf.reshape(tf.cast(indices_u, dtype) - t_clipped, (-1,))
         right = tf.reshape(t_clipped - tf.cast(indices_l, dtype), (-1,))
-        
+
         def zip_with_indices(u, x, y):
             return tf.transpose(tf.stack([
-                tf.tile(tf.range(x), tf.constant([y])),
-                tf.repeat(tf.range(y), tf.constant([x])),
+                tf.tile(tf.range(x), tf.reshape(y, (1,))),
+                tf.repeat(tf.range(y), tf.reshape(x, (1,))),
                 tf.reshape(u, (-1,))
             ]))
         
-        indices_l = zip_with_indices(indices_l + bound, t.shape[0], t.shape[1])
-        indices_u = zip_with_indices(indices_u + bound, t.shape[0], t.shape[1])
-        #print('indices l shape', indices_l.shape)
+        indices_l = zip_with_indices(indices_l + bound, tf.shape(t)[0], tf.shape(t)[1])
+        indices_u = zip_with_indices(indices_u + bound, tf.shape(t)[0], tf.shape(t)[1])
         return tf.scatter_nd(indices_l, left, shape) + tf.scatter_nd(indices_u, right, shape)
     
     def forward(self, input_dict: Dict[str, Any], state: List[Any], seq_lens: Any) -> Tuple[TensorType, List[Any]]:
@@ -220,8 +225,10 @@ class MuZeroTFModelV2(TFModelV2):
                 [BATCH, state_size_i].
         """
         # Observations need to have self.input_steps steps for each batch.
-        is_training_t = input_dict['is_training'] if 'is_training' in input_dict else tf.constant(False)
-        is_training = tf.cond(is_training_t, lambda: True, lambda: False)
+        is_training = input_dict['is_training'] if 'is_training' in input_dict else False
+        # Convert boolean tensor to Python bool
+        if isinstance(is_training, tf.Tensor):
+            is_training = tf.keras.backend.eval(is_training)
         
         if is_training:
             value, policy, actions = self.mcts.compute_action(input_dict[SampleBatch.CUR_OBS])
@@ -235,6 +242,10 @@ class MuZeroTFModelV2(TFModelV2):
         """
         WARNING: This outputs policy as probabilities if training and as logits if not training.
         """
+        # Convert boolean tensor to Python bool
+        if isinstance(is_training, tf.Tensor):
+            is_training = tf.keras.backend.eval(is_training)
+
         if is_training:
             value, policy, actions = self.mcts.compute_action(obs)
         else:
