@@ -146,7 +146,7 @@ class IntPairSumTree(SumTree):
     self._next_element_id = 0
 
   def add_batch(self, items, probs):
-    batch_size = len(items)
+    batch_size = items.shape[0]
     leaves = self._get_nodes_for_id(self._next_element_id, batch_size)
     for node, p in zip(leaves, probs):
       k = self._node_to_index(node)
@@ -161,7 +161,7 @@ class IntPairSumTree(SumTree):
     if self._next_element_id >= self.capacity:
       overwritten = self._data_list[indices, :]
     self._data_list[indices, :] = items
-    self._next_batch_id += batch_size
+    self._next_element_id += batch_size
     return overwritten
  
   def _sample_probs(self, batch_size):
@@ -341,12 +341,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     for k in item.data:
       if hasattr(item.data[k], 'shape'):
         print(k, type(item.data[k]), item.data[k].shape)
-    episodes, steps = item[SampleBatch.EPS_ID], item[SampleBatch.UNROLL_ID]
+    episodes, steps = item[SampleBatch.EPS_ID], item['t']
     #abs_errors = tf.abs(weight)
     #probs = tf.pow(abs_errors, self.alpha) if self.alpha != 1 else abs_errors
     ws = np.abs(item['weights']) * weight
     prob = np.pow(ws, self.alpha) if self.alpha != 1 else ws
-    overwritten = self._tree.add_batch(item, prob)
+    overwritten = self._tree.add_batch(np.transpose(np.vstack([episodes, steps])), prob)
     if overwritten is not None:
       for ep, st in overwritten:
         del self._episode_steps[(ep, st)]
@@ -364,12 +364,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       os = []
       rows = []
       for i, o in enumerate(simple_obs):
-        if (episode, step - (cnt - i - 1)) not in self._episode_steps:
+        o_step = step - (cnt - i - 1)
+        if (episode, o_step) not in self._episode_steps:
           os.append(o)
           rows.append(self._frame_idx)
-          self._episode_steps[(episode, step)] = self._frame_idx
+          self._episode_steps[(episode, o_step)] = self._frame_idx
           self._frame_idx += 1
-      self._frames.add_batch(os, rows)
+      if os:
+        self._frames.add_batch(np.vstack(os), rows)
     self._batches_added += 1
   
   def sample(self, num_items: int, beta: float, trajectory_len: int = 1) -> SampleBatchType:
