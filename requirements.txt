@@ -5,6 +5,7 @@ numpy
 pandas
 pillow
 ray[rllib]
+sortedcontainers
 tensorboardX
 tensorflow-gpu
 tensorflow-probability
