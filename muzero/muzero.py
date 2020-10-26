@@ -9,12 +9,12 @@ from ray.rllib.execution.common import STEPS_TRAINED_COUNTER, _get_shared_metric
 from ray.rllib.execution.concurrency_ops import Concurrently, Enqueue, Dequeue
 from ray.rllib.agents.dqn.learner_thread import LearnerThread
 from ray.rllib.execution.metric_ops import StandardMetricsReporting
-from ray.rllib.execution.replay_buffer import ReplayActor
 from ray.rllib.execution.replay_ops import SimpleReplayBuffer, Replay, StoreToReplayBuffer, WaitUntilTimestepsElapsed, MixInReplay
 from ray.rllib.execution.rollout_ops import ParallelRollouts, ConcatBatches
 from ray.rllib.execution.train_ops import TrainOneStep, UpdateTargetNetwork
 from ray.rllib.utils.types import SampleBatchType
 
+from muzero.replay_buffer import ReplayActor
 
 max_moves = 512
 

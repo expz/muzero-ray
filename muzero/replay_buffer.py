@@ -125,6 +125,9 @@ class SumTree:
   def _node_to_index(self, node):
     return (1 << node.depth) + node.num - 1
 
+  def _get_node_for_id(self, id_):
+    return Node(self._tree_depth, (id_ % self.capacity))
+
   def _get_nodes_for_id(self, id_, batch_size):
     return [
       Node(self._tree_depth, (id_ % self.capacity) + i)
@@ -140,14 +143,32 @@ class SumTree:
 class IntPairSumTree(SumTree):
   def __init__(self, capacity):
     SumTree.__init__(self, capacity)
-    self._leaf_offset = 1 << self._tree_depth - 1
+    self._leaf_offset = (1 << self._tree_depth) - 1
     self._id_tree = [0] * ((1 << (self._tree_depth + 1)) - 1)
     self._data_list = np.full((capacity, 2), -1, dtype=np.int32)
     self._next_element_id = 0
 
+  def add(self, a, b, prob):
+    node = self._get_node_for_id(self._next_element_id)
+    idx = node.num
+    k = self._node_to_index(node)
+    delta_p = prob - self._id_tree[k]
+    self._id_tree[k] = prob
+    node = self._parent(node)
+    while node is not None:
+      self._id_tree[self._node_to_index(node)] += delta_p
+      node = self._parent(node)
+    overwritten = None
+    if self._next_element_id >= self.capacity:
+      overwritten = self._data_list[idx, :]
+    self._data_list[idx, :] = [a, b]
+    self._next_element_id += 1
+    return overwritten
+
   def add_batch(self, items, probs):
     batch_size = items.shape[0]
     leaves = self._get_nodes_for_id(self._next_element_id, batch_size)
+    indices = [node.num for node in leaves]
     for node, p in zip(leaves, probs):
       k = self._node_to_index(node)
       delta_p = p - self._id_tree[k]
@@ -156,7 +177,6 @@ class IntPairSumTree(SumTree):
       while node is not None:
         self._id_tree[self._node_to_index(node)] += delta_p
         node = self._parent(node)
-    indices = [node.num for node in leaves]
     overwritten = None
     if self._next_element_id >= self.capacity:
       overwritten = self._data_list[indices, :]
@@ -172,7 +192,7 @@ class IntPairSumTree(SumTree):
     if not self._id_tree or not self._id_tree[0]:
       return None
     indices = [0] * batch_size
-    ps = self._sample_probs()
+    ps = self._sample_probs(batch_size)
     for i in range(batch_size):
       node = self._root()
       p = ps[i]
@@ -318,7 +338,7 @@ class ReplayBuffer(tf.Module):
 class PrioritizedReplayBuffer(ReplayBuffer):
   def __init__(self, capacity, tensor_spec,
                scope='prioritized_replay_buffer', alpha=1,
-               frames_per_simple_obs=4):
+               frames_per_obs=32):
     super(PrioritizedReplayBuffer, self).__init__(
       capacity,
       tensor_spec,
@@ -329,22 +349,63 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     # Tree of (episode, frame) pairs with priorities
     self._tree = IntPairSumTree(capacity)
     # Buffer of frames
-    self._frames = StructureList(capacity, tensor_spec, scope='frame_buffer')
+    full_spec = (
+      tensor_spec,
+      tf.TensorSpec((1,), dtype=tf.int32),
+      tf.TensorSpec((1,), dtype=tf.float32),
+      tf.TensorSpec((1,), dtype=tf.int32),
+      tf.TensorSpec((1,), dtype=tf.float32),
+      tf.TensorSpec((1,), dtype=tf.int32),
+      tf.TensorSpec((1,), dtype=tf.int32),
+    )
+    self._frames = StructureList(capacity, full_spec, scope='frame_buffer')
     # (episode, steps) => index of frame in self._steps
     self._episode_steps = {}
     self._batches_added = 0
     self._batches_sampled = 0
-    self.frames_per_simple_obs = frames_per_simple_obs
+    self.channels_per_frame = tensor_spec.shape[-1]
+    self.frames_per_obs = 32
 
   def add(self, item: SampleBatchType, weight: float):
-    print(item.data.keys())
-    for k in item.data:
-      if hasattr(item.data[k], 'shape'):
-        print(k, type(item.data[k]), item.data[k].shape)
+    assert len(item[SampleBatch.EPS_ID]) == 1
+    assert len(item['t']) == 1
+    episode, step = item[SampleBatch.EPS_ID][0], item['t'][0]
+    wt = item['weights'][0]  # = weight
+    wt = np.abs(wt)
+    prob = np.pow(wt, self.alpha) if self.alpha != 1 else wt
+    overwritten = self._tree.add(episode, step, prob)
+    if overwritten is not None:
+      eps, st = overwritten
+      del self._episode_steps[(eps, st)]
+    obs = np.expand_dims(item[SampleBatch.CUR_OBS][0], axis=0)
+    cnt = obs.shape[-1] // self.channels_per_frame
+    simple_obs = [
+      np.take(obs, list(range(i * 4, i * 4 + 4)), axis=-1)
+      for i in range(cnt)
+    ]
+    os = []
+    o_steps = []
+    rows = []
+    for i, o in enumerate(simple_obs):
+      o_step = step - (cnt - i - 1)
+      if (episode, o_step) not in self._episode_steps:
+        os.append(o)
+        o_steps.append(o_step)
+        rows.append(self._frame_idx % self._frames.length)
+        self._episode_steps[(episode, o_step)] = self._frame_idx
+        self._frame_idx += 1
+    if os:
+      actions = np.full((len(os), 1), item[SampleBatch.ACTIONS])
+      rewards = np.full((len(os), 1), item[SampleBatch.REWARDS])
+      dones = np.full((len(os), 1), item[SampleBatch.DONES])
+      action_prob = np.full((len(os), 1), item[SampleBatch.ACTION_PROB])
+      eps_id = np.full((len(os), 1), item[SampleBatch.EPS_ID])
+      unroll_id = np.expand_dims(np.array(o_steps), axis=-1)
+      self._frames.add_batch((np.vstack(os), actions, rewards, dones, action_prob, eps_id, unroll_id), rows)
+ 
+  def add_batch(self, item: SampleBatchType):
     episodes, steps = item[SampleBatch.EPS_ID], item['t']
-    #abs_errors = tf.abs(weight)
-    #probs = tf.pow(abs_errors, self.alpha) if self.alpha != 1 else abs_errors
-    ws = np.abs(item['weights']) * weight
+    ws = np.abs(item['weights'])
     prob = np.pow(ws, self.alpha) if self.alpha != 1 else ws
     overwritten = self._tree.add_batch(np.transpose(np.vstack([episodes, steps])), prob)
     if overwritten is not None:
@@ -352,10 +413,10 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         del self._episode_steps[(ep, st)]
     obs_batch = item[SampleBatch.CUR_OBS]
     for episode, step, obs in zip(episodes, steps, np.split(obs_batch, obs_batch.shape[0], axis=0)):
-      cnt = obs.shape[-1] // self.frames_per_simple_obs
+      cnt = obs.shape[-1] // self.channels_per_frame
       #n = len(obs.shape)
       #perm = [n] + list(range(n))
-      #simple_obs = np.transpose(np.reshape(obs, obs.shape[:-1] + (self.frames_per_simple_obs, cnt)), axes=perm)
+      #simple_obs = np.transpose(np.reshape(obs, obs.shape[:-1] + (self.channels_per_frame, cnt)), axes=perm)
       #rows = list(range(self._frame_idx, self._frame_idx + cnt))
       simple_obs = [
         np.take(obs, list(range(i * 4, i * 4 + 4)), axis=-1)
@@ -367,25 +428,56 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         o_step = step - (cnt - i - 1)
         if (episode, o_step) not in self._episode_steps:
           os.append(o)
-          rows.append(self._frame_idx)
+          rows.append(self._frame_idx % self._frames.length)
           self._episode_steps[(episode, o_step)] = self._frame_idx
           self._frame_idx += 1
       if os:
         self._frames.add_batch(np.vstack(os), rows)
     self._batches_added += 1
   
-  def sample(self, num_items: int, beta: float, trajectory_len: int = 1) -> SampleBatchType:
+  def sample(self, num_items: int, beta: float, trajectory_len: int = None) -> SampleBatchType:
+    if trajectory_len is None:
+      trajectory_len = self.frames_per_obs
     episode_steps = self._tree.sample_batch(num_items)
-    batch = []
+    frames = []
+    actions = []
+    rewards = []
+    dones = []
+    action_probs = []
+    eps_ids = []
+    unroll_ids = []
     for episode, step in episode_steps:
       indices = [
         self._episode_steps[(episode, s)]
         for s in range(step, step - trajectory_len, -1)
       ]
-      batch.append(self._frames.select(indices))
+      obs, a, r, d, ap, eid, uid = self._frames.select(indices)
+      dims = len(obs.shape)
+      if self.channels_per_frame > 1:
+        axes = list(range(1, dims - 1)) + [0, dims - 1]
+        obs = np.transpose(obs, axes=axes)
+        obs = np.reshape(obs, obs.shape[:-2] + (obs.shape[-2] * obs.shape[-1],))
+      else:
+        axes = list(range(1, dims)) + [0]
+        obs = np.transpose(obs, axes=axes)
+      frames.append(np.expand_dims(obs, axis=0))
+      actions.append(a[0][0])
+      rewards.append(r[0][0])
+      dones.append(d[0][0])
+      action_probs.append(ap[0][0])
+      eps_ids.append(eid[0][0])
+      unroll_ids.append(uid[0][0])
+
     # TODO: This doesn't work if frames are general structures (not tensors)
-    sample = SampleBatch.concat_samples(batch)
-    sample.decompress_if_needed()
+    sample = SampleBatch(**{
+      SampleBatch.CUR_OBS: np.vstack(frames),
+      SampleBatch.ACTIONS: actions,
+      SampleBatch.REWARDS: rewards,
+      SampleBatch.DONES: dones,
+      SampleBatch.ACTION_PROB: action_probs,
+      SampleBatch.EPS_ID: eps_ids,
+      SampleBatch.UNROLL_ID: unroll_ids,
+    })
     self._batches_sampled += 1
     return sample
 
@@ -397,12 +489,16 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
   def stats(self, debug=False):
     data = {
-      "added_count": self._batches_added,
+      "frame_count": self._frame_idx,
       "sampled_count": self._batches_sampled,
       "est_size_bytes": self._frames.size_bytes()[1],
       "num_entries": self._frames.length,
     }
     return data
+
+
+# Visible for testing.
+_local_replay_buffer = None
 
 
 class LocalReplayBuffer(ParallelIteratorWorker):
@@ -472,6 +568,9 @@ class LocalReplayBuffer(ParallelIteratorWorker):
 
     def get_host(self):
         return platform.node()
+
+    def get_default_buffer(self):
+        return self.replay_buffers[DEFAULT_POLICY_ID]
 
     def add_batch(self, batch):
         # Make a copy so the replay buffer doesn't pin plasma memory.
