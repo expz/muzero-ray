@@ -32,12 +32,17 @@ def main(args):
 
   config = {
       'env': 'BreakoutNoFrameskip-MuZero-v1',
-      'num_workers': 1,
+      'num_workers': 3,
+      'num_gpus': 1,
       'log_level': 'WARNING',
-      'learning_starts': 0,
+      'learning_starts': 800,
       'train_batch_size': 32,
-      'timesteps_per_iteration': 25000,
-      'buffer_size': 8000,
+      'timesteps_per_iteration': 1024,
+      'buffer_size': 65536,
+      'optimizer': {
+          'num_replay_buffer_shards': 2,
+          'debug': False,
+      },
   }
   config = update_config(ATARI_DEFAULT_CONFIG, config)
 
@@ -57,7 +62,7 @@ def main(args):
           name='breakout',
           stop={'training_iteration': 4000},
           config=config,
-          checkpoint_freq=100,
+          checkpoint_freq=16,
           checkpoint_at_end=True)
   finally:
       ray.shutdown()

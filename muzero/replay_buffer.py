@@ -13,6 +13,9 @@ from ray.rllib.utils.types import SampleBatchType
 from ray.rllib.utils.timer import TimerStat
 from ray.util.iter import ParallelIteratorWorker
 
+PRIO_WEIGHTS = 'weights'
+
+
 # Constant that represents all policies in lockstep replay mode.
 _ALL_POLICIES = "__all__"
 
@@ -98,11 +101,15 @@ class SumTree:
     self._tree_depth = log2(capacity)
 
   @property
+  def total(self):
+    pass
+
+  @property
   def size(self):
     pass
 
   @property
-  def count(self):
+  def min(self):
     pass
 
   def _root(self):
@@ -130,7 +137,7 @@ class SumTree:
 
   def _get_nodes_for_id(self, id_, batch_size):
     return [
-      Node(self._tree_depth, (id_ % self.capacity) + i)
+      Node(self._tree_depth, (id_ + i) % self.capacity)
       for i in range(batch_size)
     ]
 
@@ -144,24 +151,61 @@ class IntPairSumTree(SumTree):
   def __init__(self, capacity):
     SumTree.__init__(self, capacity)
     self._leaf_offset = (1 << self._tree_depth) - 1
+    # tree of priorities
     self._id_tree = [0] * ((1 << (self._tree_depth + 1)) - 1)
+    # list of integer pairs. pair at index i corresponds to leaf i of tree.
     self._data_list = np.full((capacity, 2), -1, dtype=np.int32)
+    # set of integer pairs
+    self._pairs = set([])
     self._next_element_id = 0
+    self._total = 0
+    self._min = float('inf')
+    self._max = 0
+
+  @property
+  def next_id(self):
+    return self._next_element_id
+
+  @property
+  def total(self):
+    return self._total
+
+  @property
+  def size(self):
+    return min(self._next_element_id, self.capacity)
+
+  @property
+  def min(self):
+    return self._min
+
+  @property
+  def max(self):
+    return self._max
 
   def add(self, a, b, prob):
     node = self._get_node_for_id(self._next_element_id)
-    idx = node.num
+    #s = 'node num:' + str(node.num) + ' next id:' + str(self._next_element_id) + ' index:' + str(self._node_to_index(node)) + '\n'
+    id_ = node.num
+    overwritten = None
+    if self._next_element_id >= self.capacity:
+      overwritten = self._data_list[id_, :]
+      self._pairs.remove(tuple(overwritten))
+    self._data_list[id_, :] = [a, b]
+    self._pairs.add((a, b))
     k = self._node_to_index(node)
     delta_p = prob - self._id_tree[k]
+    #s += 'k: ' + str(k) + ' delta_p: ' + str(delta_p) + '\n'
     self._id_tree[k] = prob
     node = self._parent(node)
     while node is not None:
+    #  s += 'node: ' + str((node.depth, node.num)) + ' index: ' + str(self._node_to_index(node)) + ' | '
       self._id_tree[self._node_to_index(node)] += delta_p
       node = self._parent(node)
-    overwritten = None
-    if self._next_element_id >= self.capacity:
-      overwritten = self._data_list[idx, :]
-    self._data_list[idx, :] = [a, b]
+    self._total += delta_p
+    self._min = min(self._min, prob)
+    self._max = max(self._max, prob)
+    #if not all([self._id_tree[i] == 0 for i in range(k + 1, k + 500)]):
+    #  raise Exception(s)
     self._next_element_id += 1
     return overwritten
 
@@ -172,6 +216,9 @@ class IntPairSumTree(SumTree):
     for node, p in zip(leaves, probs):
       k = self._node_to_index(node)
       delta_p = p - self._id_tree[k]
+      self._total += delta_p
+      self._min = min(self._min, p)
+      self._max = max(self._max, p)
       self._id_tree[k] = p
       node = self._parent(node)
       while node is not None:
@@ -180,145 +227,78 @@ class IntPairSumTree(SumTree):
     overwritten = None
     if self._next_element_id >= self.capacity:
       overwritten = self._data_list[indices, :]
+      for pair in np.split(overwritten, overwritten.shape[0], axis=0):
+        self._pairs.add(tuple(pair))
     self._data_list[indices, :] = items
+    for pair in np.split(items, items.shape[0], axis=0):
+      self._pairs.add(tuple(pair))
     self._next_element_id += batch_size
     return overwritten
  
   def _sample_probs(self, batch_size):
-    max_p = self._id_tree[0]
-    return np.random.uniform(low=0.0, high=max_p, size=[batch_size])
+    max_val = self._id_tree[0]
+    return np.random.uniform(low=0.0, high=max_val, size=[batch_size])
 
   def sample_batch(self, batch_size):
-    if not self._id_tree or not self._id_tree[0]:
-      return None
+    if self._next_element_id == 0:
+      return None, None
+    #print('next element id:', self._next_element_id, 'capacity:', self.capacity, 'last mass:', self._id_tree[self._next_element_id - 1], 'last data:', self._data_list[self._next_element_id - 1])
     indices = [0] * batch_size
     ps = self._sample_probs(batch_size)
+    #s = ''
+    #bad = False
     for i in range(batch_size):
       node = self._root()
       p = ps[i]
       while not self._is_leaf(node):
+      #  s += 'node:' + str((node.depth, node.num)) + 'p:' + str(p) + '\n'
         left = self._left_child(node)
         right = self._right_child(node)
+      #  s += 'l child:' + str((left.depth, left.num)) + 'r child:' + str((right.depth, right.num)) + '\n'
         left_val = self._id_tree[self._node_to_index(left)]
+      #  s += 'l index:' + str(self._node_to_index(left)) + 'l val:' + str(left_val) + '\n'
         if p <= left_val:
+      #    s += 'went left\n'
           node = left
         else:
+      #    s += 'went right\n'
           node = right
           p -= left_val
+      #if node.num >= self._next_element_id:
+      #  s += '^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n'
+      #  x = self._node_to_index(node)
+      #  s += str(self._id_tree[max(0, x - 700):x]) + '\n'
+      #  bad = True
       indices[i] = node.num
-    return self._data_list[indices]
+      #s += 'p:' + str(p) + 'id:' + str(node.num) + 'data:' + str(self._data_list[node.num]) + '\n'
+      next_node = self._get_node_for_id(self._next_element_id)
+      next_index = self._node_to_index(next_node)
+      #s += 'next id: ' + str(self._next_element_id) + ' next node: ' + str((next_node.depth, next_node.num)) + ' next index: ' + str(next_index) + '\n'
+      #s += str(self._id_tree[next_index:next_index + 100]) + '\n'
+      #s += str(self._data_list[self._next_element_id:self._next_element_id + 100]) + '\n'
+      #s += '=================================\n'
+      #if bad:
+      #  raise Exception(s)
+    return self._data_list[indices], indices
 
-  def update(self, idx, weight):
-    node = Node(self._tree_depth, idx)
+  def get_by_index(self, idx):
+    return self._id_tree[self._node_to_index(self._get_node_for_id(idx))]
+
+  def update(self, id_, weight):
+    node = self._get_node_for_id(id_)
+    #print('update ', (node.depth, node.num), ' id:', id_)
     delta = weight - self._id_tree[self._node_to_index(node)]
+    self._total += delta
+    self._min = min(self._min, weight)
+    self._max = max(self._max, weight)
     self._id_tree[self._node_to_index(node)] += delta
     while self._parent(node):
       node = self._parent(node)
       self._id_tree[self._node_to_index(node)] += delta
+    
+  def contains(self, a, b):
+    return (a, b) in self._pairs
 
-
-class StructureSumTree(tf.Module, SumTree):
-  def __init__(self,
-               capacity,
-               tensor_spec,
-               scope='sum_tree',
-               device='cpu:*'):
-    tf.Module.__init__(self, name='SumTree')
-    SumTree.__init__(self, capacity)
-
-    def _add_batch_dim(spec):
-      return tf.TensorSpec([None] + spec.shape, spec.dtype)
-
-    self._data_spec = tensor_spec
-    self._batch_spec = tf.nest.map_structure(_add_batch_dim, tensor_spec)
-    self._capacity = tf.int64(capacity)
-    self._scope = scope
-    self._device = device
-    self._leaf_offset = 1 << self._tree_depth - 1
-    id_spec = tf.TensorSpec([1], tf.float32, 'p')
-    self._id_tree = [0] * ((1 << (self._tree_depth + 1)) - 1)
-    self._data_list = StructureList(tensor_spec, capacity, scope)
-    self._next_element_id = tf.Variable(tf.convert_to_tensor(0, dtype=tf.int64), name='next_batch_id')
-    self._random = tf.random.Generator.from_seed(42)
-
-  def variables(self):
-      return (
-        self._data_list.variables(),
-        self._next_element_id)
-
-  @property
-  def device(self):
-    return self._device
-
-  @property
-  def scope(self):
-    return self._scope
-
-  @property
-  def size(self):
-    return tf.minimum(self._next_element_id, self._capacity)
-
-  @property
-  def count(self):
-    return self._next_element_id
-
-  def add_batch(self, items, probs):
-    # Validate tuple structure against spec's tuple structure
-    tf.nest.assert_same_structure(items, self._batch_spec)
-    # Validate tensors against specs
-    flattened_specs = tf.nest.flatten(self._batch_spec)
-    flattened_items = tf.nest.flatten(items)
-    if any(
-        not spec.is_compatible_with(tensor)
-        for spec, tensor in zip(flattened_specs, flattened_items)):
-      raise Exception(
-          f'TensorSpec not compatible with Tensor. '
-          f'Specs: {flattened_specs}. '
-          f'Tensors: {[tf.TensorSpec.from_tensor(t) for t in flattened_items]}.'
-      )
-
-    batch_size = flattened_items[0].shape[0]
-    with tf.device(self._device), tf.name_scope(self._scope):
-      leaves = self._get_nodes_for_id(self._next_element_id, batch_size)
-      for node, p in zip(leaves, probs):
-        k = self._node_to_index(node)
-        delta_p = p - self._id_tree[k]
-        self._id_tree[k] = p
-        node = self._parent(node)
-        while node is not None:
-          self._id_tree[self._node_to_index(node)] += delta_p
-          node = self._parent(node)
-      indices = [node.num for node in leaves]
-      overwritten = None
-      if self._next_element_id >= self._capacity:
-        overwritten = self._data_list.select(indices)
-      self._data_list.add_batch(items, indices)
-      self._next_batch_id += batch_size
-      return overwritten
- 
-  def _sample_probs(self, batch_size):
-    max_p = self._id_tree[0]
-    return self._random.uniform(shape=[batch_size], maxval=max_p)
-
-  def sample_batch(self, batch_size):
-    if not self._id_tree or not self._id_tree[0]:
-      return None
-    indices = [0] * batch_size
-    ps = self._sample_probs()
-    for i in range(batch_size):
-      node = self._root()
-      p = ps[i]
-      while not self._is_leaf(node):
-        left = self._left_child(node)
-        right = self._right_child(node)
-        left_val = self._id_tree[self._node_to_index(left)]
-        if p <= left_val:
-          node = left
-        else:
-          node = right
-          p -= left_val
-      indices[i] = node.num
-    return self._data_list.select(indices)
 
 class ReplayBuffer(tf.Module):
 
@@ -328,6 +308,11 @@ class ReplayBuffer(tf.Module):
     self._capacity = capacity
     self._scope = scope
 
+    if isinstance(tensor_spec, tuple):
+      self._fields = [spec.name for spec in tensor_spec]
+    else:
+      self._fields = None
+
   def add(self, item: SampleBatchType, weight: float):
     pass
 
@@ -336,8 +321,9 @@ class ReplayBuffer(tf.Module):
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
+
   def __init__(self, capacity, tensor_spec,
-               scope='prioritized_replay_buffer', alpha=1,
+               scope='prioritized_replay_buffer', alpha=1, beta=1,
                frames_per_obs=32):
     super(PrioritizedReplayBuffer, self).__init__(
       capacity,
@@ -345,34 +331,33 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       scope,
       'PrioritizedReplayBuffer')
     self.alpha = alpha
-    self._frame_idx = 0
+    self.beta = beta
+    self._step_idx = 0
     # Tree of (episode, frame) pairs with priorities
     self._tree = IntPairSumTree(capacity)
     # Buffer of frames
-    full_spec = (
-      tensor_spec,
-      tf.TensorSpec((1,), dtype=tf.int32),
-      tf.TensorSpec((1,), dtype=tf.float32),
-      tf.TensorSpec((1,), dtype=tf.int32),
-      tf.TensorSpec((1,), dtype=tf.float32),
-      tf.TensorSpec((1,), dtype=tf.int32),
-      tf.TensorSpec((1,), dtype=tf.int32),
-    )
-    self._frames = StructureList(capacity, full_spec, scope='frame_buffer')
-    # (episode, steps) => index of frame in self._steps
+    self._steps = StructureList(capacity, tensor_spec, scope='frame_buffer')
+    # (episode, step) => (index of step in self._steps, id of step in self._tree)
     self._episode_steps = {}
     self._batches_added = 0
     self._batches_sampled = 0
-    self.channels_per_frame = tensor_spec.shape[-1]
-    self.frames_per_obs = 32
+    self.channels_per_frame = 1
+    for i, field in enumerate(self._fields):
+      if field == SampleBatch.CUR_OBS:
+        self.channels_per_frame = tensor_spec[i].shape[-1]
+    self.frames_per_obs = frames_per_obs
 
   def add(self, item: SampleBatchType, weight: float):
     assert len(item[SampleBatch.EPS_ID]) == 1
     assert len(item['t']) == 1
+    #print('sample keys:', sorted([(field, item[field].shape) for field in item.data]))
     episode, step = item[SampleBatch.EPS_ID][0], item['t'][0]
-    wt = item['weights'][0]  # = weight
-    wt = np.abs(wt)
-    prob = np.pow(wt, self.alpha) if self.alpha != 1 else wt
+    if weight == -1:
+      weight = self._tree.max if self._tree.max else 1
+    else:
+      assert weight >= 0
+    prob = np.pow(weight, self.alpha) if self.alpha != 1 else weight
+    id_ = self._tree.next_id
     overwritten = self._tree.add(episode, step, prob)
     if overwritten is not None:
       eps, st = overwritten
@@ -380,7 +365,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     obs = np.expand_dims(item[SampleBatch.CUR_OBS][0], axis=0)
     cnt = obs.shape[-1] // self.channels_per_frame
     simple_obs = [
-      np.take(obs, list(range(i * 4, i * 4 + 4)), axis=-1)
+      np.take(obs, list(range(i * self.channels_per_frame, (i + 1) * self.channels_per_frame)), axis=-1)
       for i in range(cnt)
     ]
     os = []
@@ -388,70 +373,95 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     rows = []
     for i, o in enumerate(simple_obs):
       o_step = step - (cnt - i - 1)
-      if (episode, o_step) not in self._episode_steps:
+      frame_idx, _ = self._episode_steps.get((episode, o_step), (None, None))
+      # don't re-save secondary frames that were saved from a previous call
+      if frame_idx is None or o_step == step:
         os.append(o)
         o_steps.append(o_step)
-        rows.append(self._frame_idx % self._frames.length)
-        self._episode_steps[(episode, o_step)] = self._frame_idx
-        self._frame_idx += 1
-    if os:
-      actions = np.full((len(os), 1), item[SampleBatch.ACTIONS])
-      rewards = np.full((len(os), 1), item[SampleBatch.REWARDS])
-      dones = np.full((len(os), 1), item[SampleBatch.DONES])
-      action_prob = np.full((len(os), 1), item[SampleBatch.ACTION_PROB])
-      eps_id = np.full((len(os), 1), item[SampleBatch.EPS_ID])
-      unroll_id = np.expand_dims(np.array(o_steps), axis=-1)
-      self._frames.add_batch((np.vstack(os), actions, rewards, dones, action_prob, eps_id, unroll_id), rows)
+        # TODO: Get rid of rows argument of list add_batch and have it
+        # keep track of next id so we don't need self._step_idx
+        rows.append(self._step_idx % self._steps.length)
+        if o_step == step:
+          if (episode, o_step) in self._episode_steps:
+            logging.warn(
+              f'Episode {episode} step {o_step} is being added to the replay '
+              'buffer a second time. It will overwrite and have a priority '
+              'which is the sum of the previous and current priorities.')
+          self._episode_steps[(episode, o_step)] = (self._step_idx % self._steps.length, id_)
+        else:
+          self._episode_steps[(episode, o_step)] = (self._step_idx % self._steps.length, None)
+        self._step_idx += 1
+
+    def field_val(item, field, step_count, i):
+      """
+      Store zeros for steps that are included in the current step
+      data but are not the primary step (since we don't know anything
+      about them except their observation).
+
+      This has a hack to match rllib behavior whereby tensors of
+      shape (1,) are expanded to (1, 1) and then concatenated to (32, 1)
+      but tensors of shape (1, 5) are kept the same and concatenated to
+      (32, 5).
+      """
+      if len(item[field].shape) > 1 and item[field].shape[0] == 1:
+        zeros_shape = (step_count - 1,) + tuple(item[field].shape)[1:]
+        data = item[field]
+      else:
+        zeros_shape = (step_count - 1,) + tuple(item[field].shape)
+        data = np.expand_dims(item[field], axis=0)
+      zeros = np.full(zeros_shape, 0, dtype=self._tensor_spec[i].dtype.as_numpy_dtype)
+      return np.concatenate([zeros, data])
  
-  def add_batch(self, item: SampleBatchType):
-    episodes, steps = item[SampleBatch.EPS_ID], item['t']
-    ws = np.abs(item['weights'])
-    prob = np.pow(ws, self.alpha) if self.alpha != 1 else ws
-    overwritten = self._tree.add_batch(np.transpose(np.vstack([episodes, steps])), prob)
-    if overwritten is not None:
-      for ep, st in overwritten:
-        del self._episode_steps[(ep, st)]
-    obs_batch = item[SampleBatch.CUR_OBS]
-    for episode, step, obs in zip(episodes, steps, np.split(obs_batch, obs_batch.shape[0], axis=0)):
-      cnt = obs.shape[-1] // self.channels_per_frame
-      #n = len(obs.shape)
-      #perm = [n] + list(range(n))
-      #simple_obs = np.transpose(np.reshape(obs, obs.shape[:-1] + (self.channels_per_frame, cnt)), axes=perm)
-      #rows = list(range(self._frame_idx, self._frame_idx + cnt))
-      simple_obs = [
-        np.take(obs, list(range(i * 4, i * 4 + 4)), axis=-1)
-        for i in range(cnt)
-      ]
-      os = []
-      rows = []
-      for i, o in enumerate(simple_obs):
-        o_step = step - (cnt - i - 1)
-        if (episode, o_step) not in self._episode_steps:
-          os.append(o)
-          rows.append(self._frame_idx % self._frames.length)
-          self._episode_steps[(episode, o_step)] = self._frame_idx
-          self._frame_idx += 1
-      if os:
-        self._frames.add_batch(np.vstack(os), rows)
-    self._batches_added += 1
-  
-  def sample(self, num_items: int, beta: float, trajectory_len: int = None) -> SampleBatchType:
+    step_count = len(os)
+    assert step_count > 0
+    data = {
+      SampleBatch.CUR_OBS: np.vstack(os),
+      SampleBatch.EPS_ID: np.full((step_count, 1), item[SampleBatch.EPS_ID]),
+      SampleBatch.UNROLL_ID: np.expand_dims(np.array(o_steps), axis=-1),
+    }
+    exclude_fields = set([
+      SampleBatch.CUR_OBS, SampleBatch.EPS_ID, SampleBatch.UNROLL_ID,
+    ])
+    #print('_fields', [(field, type(field)) for field in self._fields])
+    data.update({
+      field: field_val(item, field, step_count, i)
+      for i, field in enumerate(self._fields)
+      if field not in exclude_fields
+    })
+    batch = tuple(data[field] for field in self._fields)
+    #print('batch', [(field, batch[i].shape) for i, field in enumerate(self._fields)])
+    self._steps.add_batch(batch, rows)
+
+  def sample(self, num_items: int, trajectory_len: int = None) -> SampleBatchType:
     if trajectory_len is None:
       trajectory_len = self.frames_per_obs
-    episode_steps = self._tree.sample_batch(num_items)
-    frames = []
-    actions = []
-    rewards = []
-    dones = []
-    action_probs = []
-    eps_ids = []
-    unroll_ids = []
+    episode_steps, tree_indices = self._tree.sample_batch(num_items)
+    if episode_steps is None:
+      raise Exception('Tried to sample from empty replay buffer')
+    # indexes are ids in integer pair tree
+    batch_indexes = [
+      self._episode_steps[(ep, step)][1]
+      for ep, step in episode_steps
+    ]
+    #raise Exception(f"""
+    #  print('get by idnex', {self._tree.get_by_index(tree_indices[0])})
+    #  print('tree total', {self._tree.total})
+    #  print('tree size', {self._tree.size})
+    #  print('tree min', {self._tree.min})
+    #  """)
+    max_weight = (self._tree.min * self._tree.size)**(-self.beta)
+    weights = [
+      ((self._tree.get_by_index(idx) / self._tree.total) * self._tree.size)**(-self.beta) / max_weight
+      for idx in tree_indices
+    ]
+    data = { field: [] for field in self._fields }
     for episode, step in episode_steps:
       indices = [
-        self._episode_steps[(episode, s)]
+        self._episode_steps[(episode, s)][0]
         for s in range(step, step - trajectory_len, -1)
       ]
-      obs, a, r, d, ap, eid, uid = self._frames.select(indices)
+      item = self._steps.select(indices)
+      obs = item[self._fields.index(SampleBatch.CUR_OBS)]
       dims = len(obs.shape)
       if self.channels_per_frame > 1:
         axes = list(range(1, dims - 1)) + [0, dims - 1]
@@ -460,39 +470,39 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       else:
         axes = list(range(1, dims)) + [0]
         obs = np.transpose(obs, axes=axes)
-      frames.append(np.expand_dims(obs, axis=0))
-      actions.append(a[0][0])
-      rewards.append(r[0][0])
-      dones.append(d[0][0])
-      action_probs.append(ap[0][0])
-      eps_ids.append(eid[0][0])
-      unroll_ids.append(uid[0][0])
+      for i, field in enumerate(self._fields):
+        if field == SampleBatch.CUR_OBS:
+          data[field].append(np.expand_dims(obs, axis=0))
+        elif len(item[i][0].shape) == 1 and item[i][0].shape[0] == 1:
+          data[field].append(item[i][0][0])
+        else:
+          data[field].append(item[i][0])
 
+    data_np = {
+      field: np.vstack(data[field]) if isinstance(data[field][0], np.ndarray) else np.array(data[field])
+      for field in self._fields
+    }
+    #print('data_np', [(field, data_np[field].shape) for field in data_np])
     # TODO: This doesn't work if frames are general structures (not tensors)
-    sample = SampleBatch(**{
-      SampleBatch.CUR_OBS: np.vstack(frames),
-      SampleBatch.ACTIONS: actions,
-      SampleBatch.REWARDS: rewards,
-      SampleBatch.DONES: dones,
-      SampleBatch.ACTION_PROB: action_probs,
-      SampleBatch.EPS_ID: eps_ids,
-      SampleBatch.UNROLL_ID: unroll_ids,
-    })
+    sample = SampleBatch(**data_np)
+    sample['batch_indexes'] = batch_indexes
+    sample[PRIO_WEIGHTS] = weights
     self._batches_sampled += 1
     return sample
 
   def update_priorities(self, idxes, priorities):
+    print('next id: ', self._tree.next_id, 'first priority:', priorities[0])
     assert len(idxes) == len(priorities)
     for idx, priority in zip(idxes, priorities):
       assert priority > 0
-      self._tree.update(idx, priority**self._alpha)
+      self._tree.update(idx, priority**self.alpha)
 
   def stats(self, debug=False):
     data = {
-      "frame_count": self._frame_idx,
+      "frame_count": self._step_idx,
       "sampled_count": self._batches_sampled,
-      "est_size_bytes": self._frames.size_bytes()[1],
-      "num_entries": self._frames.length,
+      "est_size_bytes": self._steps.size_bytes()[1],
+      "num_entries": self._steps.length,
     }
     return data
 
@@ -545,7 +555,10 @@ class LocalReplayBuffer(ParallelIteratorWorker):
 
         def new_buffer():
             return PrioritizedReplayBuffer(
-                self.buffer_size, tensor_spec, alpha=prioritized_replay_alpha)
+                self.buffer_size,
+                tensor_spec,
+                alpha=prioritized_replay_alpha,
+                beta=prioritized_replay_beta)
 
         self.replay_buffers = collections.defaultdict(new_buffer)
 
@@ -586,8 +599,8 @@ class LocalReplayBuffer(ParallelIteratorWorker):
             else:
                 for policy_id, b in batch.policy_batches.items():
                     for s in b.timeslices(self.replay_sequence_length):
-                        if "weights" in s:
-                            weight = np.mean(s["weights"])
+                        if PRIO_WEIGHTS in s:
+                            weight = np.mean(s[PRIO_WEIGHTS])
                         else:
                             weight = None
                         self.replay_buffers[policy_id].add(s, weight=weight)
@@ -600,19 +613,17 @@ class LocalReplayBuffer(ParallelIteratorWorker):
                 DEFAULT_POLICY_ID: fake_batch
             }, fake_batch.count)
 
-        if self.num_added < self.replay_starts:
+        # TODO: This might break training intensity
+        if self.num_added < max(self.replay_starts, self.replay_batch_size):
             return None
 
         with self.replay_timer:
             if self.replay_mode == "lockstep":
-                return self.replay_buffers[_ALL_POLICIES].sample(
-                    self.replay_batch_size, beta=self.prioritized_replay_beta)
+                return self.replay_buffers[_ALL_POLICIES].sample(self.replay_batch_size)
             else:
                 samples = {}
                 for policy_id, replay_buffer in self.replay_buffers.items():
-                    samples[policy_id] = replay_buffer.sample(
-                        self.replay_batch_size,
-                        beta=self.prioritized_replay_beta)
+                    samples[policy_id] = replay_buffer.sample(self.replay_batch_size)
                 return MultiAgentBatch(samples, self.replay_batch_size)
 
     def update_priorities(self, prio_dict):

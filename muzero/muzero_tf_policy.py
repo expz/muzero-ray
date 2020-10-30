@@ -1,5 +1,6 @@
 import gym
 import numpy as np
+from numpy.lib.index_tricks import AxisConcatenator
 from ray.rllib.agents.trainer import with_common_config
 from ray.rllib.evaluation.postprocessing import Postprocessing
 from ray.rllib.models.modelv2 import ModelV2
@@ -19,9 +20,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from muzero.mcts import MCTS
 from muzero.muzero import ATARI_DEFAULT_CONFIG
 from muzero.muzero_tf_model import MuZeroTFModelV2
+from muzero.replay_buffer import PRIO_WEIGHTS
 
-
-PRIO_WEIGHTS = 'weights'
 
 def make_mu_zero_model(policy: Policy,
                        obs_space: gym.spaces.Space,
@@ -77,9 +77,18 @@ class MuZeroLoss:
         w.extend([1. / K] * (K - 1))
         w = tf.identity([w])
 
-        self.total_reward_loss = reward_loss_fn(tf.identity(reward_targets), reward_preds, model)
-        self.total_vf_loss = value_loss_fn(tf.identity(value_targets), value_preds, model)
-        self.total_policy_loss = policy_loss_fn(tf.identity(policy_targets), policy_preds)
+        #print('reward targets:', reward_targets.shape)
+        #print('reward preds:', reward_preds.shape)
+        #print('value targets:', value_targets.shape)
+        #print('value preds:', value_preds.shape)
+        #print('policy targets:', policy_targets.shape)
+        #print('policy preds:', policy_preds.shape)
+        self.total_reward_loss = reward_loss_fn(model.scale_target(tf.identity(reward_targets)), reward_preds, model)
+        self.total_vf_loss = value_loss_fn(model.scale_target(tf.identity(value_targets)), value_preds, model)
+        self.total_policy_loss = policy_loss_fn(model.scale_target(tf.identity(policy_targets)), policy_preds)
+        #print('total reward:', self.total_reward_loss.shape)
+        #print('total vf:', self.total_vf_loss.shape)
+        #print('total_policy:', self.total_policy_loss.shape)
         self.total_loss = scale_gradient(self.total_reward_loss + self.total_vf_loss + self.total_policy_loss, w)
 
         for t in model.trainable_variables():
@@ -88,6 +97,7 @@ class MuZeroLoss:
         self.mean_reward_loss = tf.math.reduce_mean(self.total_reward_loss)
         self.mean_vf_loss = tf.math.reduce_mean(self.total_vf_loss)
         self.mean_policy_loss = tf.math.reduce_mean(self.total_policy_loss)
+        self.sample_loss = tf.math.reduce_mean(self.total_loss, axis=-1)
         self.loss = tf.math.reduce_mean(self.total_loss)
 
 # TODO: Check if I need to make things tf functions.
@@ -110,6 +120,7 @@ def mu_zero_loss(policy,
         value_preds.append(value)
         policy_preds.append(action_probs)
         hidden_state, reward = model.dynamics(hidden_state, actions)
+        hidden_state = scale_gradient(hidden_state, 0.5)
         reward_preds.append(reward)
 
     reward_preds = tf.transpose(tf.convert_to_tensor(reward_preds), perm=(1, 0, 2))
@@ -247,8 +258,9 @@ def mu_zero_postprocess(
     sample_batch['rollout_rewards'] = rollout(rewards)
     sample_batch['rollout_policies'] = rollout(action_dist_inputs, default = [0] * len(action_dist_inputs[0]))
 
+    # TODO: set to None and set to max priority in replay buffer add()
     if PRIO_WEIGHTS not in sample_batch:
-        sample_batch[PRIO_WEIGHTS] = np.ones_like(sample_batch[SampleBatch.REWARDS])
+        sample_batch[PRIO_WEIGHTS] = -np.ones_like(sample_batch[SampleBatch.REWARDS])
     return sample_batch
 
 def before_init(policy, obs_space, action_space, config):
@@ -284,7 +296,7 @@ def vf_preds_fetches(policy):
 
 def td_error_fetches(policy):
     return {
-        'td_error': policy.loss_obj.total_loss,
+        'td_error': policy.loss_obj.sample_loss,
     }
 
 class ComputeTDErrorMixin:

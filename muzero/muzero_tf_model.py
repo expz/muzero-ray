@@ -75,6 +75,8 @@ class MuZeroTFModelV2(TFModelV2):
         self.K = model_config['loss_steps']
         self.train_n_channels = self.input_steps + self.K
         self.l2_reg = model_config['l2_reg']
+        # the epsilon used in the formula for scaling the targets
+        self.scaling_epsilon = model_config['scaling_epsilon']
         self.value_max = model_config['value_max']
         self.reward_max = model_config['reward_max']
 
@@ -158,6 +160,50 @@ class MuZeroTFModelV2(TFModelV2):
         one_hot = tf.one_hot(tile, self.num_outputs)
         return one_hot
 
+    def scale_target(self, t: TensorType) -> TensorType:
+        return (
+            tf.math.sign(t) * tf.math.sqrt(tf.math.abs(t) + tf.ones_like(t, dtype=t.dtype))
+            - tf.ones_like(t, dtype=t.dtype) + self.scaling_epsilon * t
+        )
+
+    def unscale_target(self, t: TensorType) -> TensorType:
+        """
+        Valid for self.scaling_epsilon < 0.25.
+
+        t >= 0 => y >= 0
+        y = s - 1 + eps * t
+        t = s^2 - 1
+        y = s - 1 + eps * s^2 - eps
+        y = eps * s^2 + s - (1 + eps)
+        0 = eps * s^2 + s - (1 + eps + y)
+        s = (-1 +/- sqrt(1 + 4 * eps * (1 + eps + y))) / (2 * eps)
+        s = (-1 + sqrt(1 + 4 * eps * (1 + eps + y)))  / (2 * eps)
+        t = (-1 + sqrt(1 + 4 * eps * (y + eps + 1)))^2 / (4 * eps^2) - 1
+
+        t < 0 => y < 0, eps < 1, y > 1 - eps - 1 / (4 * eps)
+        eps < 0.25 => y > 1 - eps - 1 / (4 * eps)
+        y = -s + 1 - eps * t
+        t = -s^2 + 1
+        y = -s + 1 - eps * (-s^2 + 1)
+        y = eps * s^2 - s + (1 - eps)
+        0 = eps * s^2 - s + (1 - eps - y)
+        s = (1 +/- sqrt(1 - 4 * eps * (1 - eps - y))) / (2 * eps)
+        s = (1 - sqrt(1 - 4 * eps * (1 - eps - y))) / (2 * eps)
+        t = -(1 - sqrt(1 - 4 * eps * (1 - eps - y)))^2 / (4 * eps^2) + 1
+        t = -((-1 + sqrt(1 + 4 * eps * (y + eps - 1)))^2 / (4 * eps^2) - 1)
+
+        t = sign(y) * (-1 + sqrt(1 + 4 * eps * (y + eps + sign(y))))^2 / (4 * eps^2) - 1)
+        """
+        ones = tf.ones_like(t, dtype=t.dtype)
+        eps = self.scaling_epsilon * ones
+        return tf.math.sign(t) * (
+            tf.math.divide(
+                tf.math.square(
+                    -ones
+                    + tf.math.sqrt(ones + 4 * self.scaling_epsilon * (t + eps + tf.math.sign(t)))
+                ), 4 * tf.math.pow(eps, 2)
+            ) - ones)
+
     def value_function(self) -> TensorType:
         return self._value_out
 
@@ -204,6 +250,7 @@ class MuZeroTFModelV2(TFModelV2):
                 tf.reshape(u, (-1,))
             ]))
         
+        #print('indices_l shape', indices_l.shape)
         indices_l = zip_with_indices(indices_l + bound, tf.shape(t)[0], tf.shape(t)[1])
         indices_u = zip_with_indices(indices_u + bound, tf.shape(t)[0], tf.shape(t)[1])
         return tf.scatter_nd(indices_l, left, shape) + tf.scatter_nd(indices_u, right, shape)
