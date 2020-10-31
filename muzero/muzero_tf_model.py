@@ -119,7 +119,7 @@ class MuZeroTFModelV2(TFModelV2):
         output = tf.keras.layers.Dense(256, activation='relu')(output)
         if config[f'{name}_type'] == 'categorical':
             output = tf.keras.layers.Dense(2 * config[f'{name}_max'] + 1)(output)
-        elif config[f'{name}_type'] == 'scalar' and not infinite_max:
+        elif config[f'{name}_type'] == 'scalar':
             output = tf.keras.layers.Dense(1)(output)
         else:
             raise NotImplemented(f'{name}_type "{config[name + "_type"]}" unknown')
@@ -160,49 +160,64 @@ class MuZeroTFModelV2(TFModelV2):
         one_hot = tf.one_hot(tile, self.num_outputs)
         return one_hot
 
-    def scale_target(self, t: TensorType) -> TensorType:
-        return (
-            tf.math.sign(t) * tf.math.sqrt(tf.math.abs(t) + tf.ones_like(t, dtype=t.dtype))
-            - tf.ones_like(t, dtype=t.dtype) + self.scaling_epsilon * t
-        )
+    def transform(self, t: TensorType) -> TensorType:
+        if isinstance(t, np.ndarray):
+            return (
+                np.sign(t) * (
+                    np.sqrt(np.abs(t) + 1) - 1
+                ) + self.scaling_epsilon * t
+            )
+        else:
+            return (
+                tf.math.sign(t) * (
+                    tf.math.sqrt(tf.math.abs(t) + 1) - 1
+                ) + self.scaling_epsilon * t
+            )
 
-    def unscale_target(self, t: TensorType) -> TensorType:
+    def untransform(self, t: TensorType) -> TensorType:
         """
         Valid for self.scaling_epsilon < 0.25.
 
-        t >= 0 => y >= 0
-        y = s - 1 + eps * t
-        t = s^2 - 1
+        x >= 0 => y >= 0
+        y = s - 1 + eps * x
+        x = s^2 - 1
         y = s - 1 + eps * s^2 - eps
         y = eps * s^2 + s - (1 + eps)
         0 = eps * s^2 + s - (1 + eps + y)
         s = (-1 +/- sqrt(1 + 4 * eps * (1 + eps + y))) / (2 * eps)
         s = (-1 + sqrt(1 + 4 * eps * (1 + eps + y)))  / (2 * eps)
-        t = (-1 + sqrt(1 + 4 * eps * (y + eps + 1)))^2 / (4 * eps^2) - 1
+        x = (-1 + sqrt(1 + 4 * eps * (y + eps + 1)))^2 / (4 * eps^2) - 1
 
-        t < 0 => y < 0, eps < 1, y > 1 - eps - 1 / (4 * eps)
-        eps < 0.25 => y > 1 - eps - 1 / (4 * eps)
-        y = -s + 1 - eps * t
-        t = -s^2 + 1
-        y = -s + 1 - eps * (-s^2 + 1)
-        y = eps * s^2 - s + (1 - eps)
-        0 = eps * s^2 - s + (1 - eps - y)
-        s = (1 +/- sqrt(1 - 4 * eps * (1 - eps - y))) / (2 * eps)
-        s = (1 - sqrt(1 - 4 * eps * (1 - eps - y))) / (2 * eps)
-        t = -(1 - sqrt(1 - 4 * eps * (1 - eps - y)))^2 / (4 * eps^2) + 1
-        t = -((-1 + sqrt(1 + 4 * eps * (y + eps - 1)))^2 / (4 * eps^2) - 1)
+        x < 0 => y < 0, eps < 1, y > 1 - eps - 1 / (4 * eps)
+        #eps < 0.25 => y > 1 - eps - 1 / (4 * eps)
+        1 + eps < y
+        y = -s + 1 + eps * x
+        x = -s^2 + 1
+        y = -s + 1 + eps * (-s^2 + 1)
+        y = -eps * s^2 - s + (1 + eps)
+        0 = -eps * s^2 - s + (1 + eps - y)
+        s = (1 +/- sqrt(1 - 4 * (-eps) * (1 + eps - y))) / (2 * (-eps))
+        s = (-1 + sqrt(1 + 4 * eps * (1 + eps - y))) / (2 * eps)
+        x = -(1 - sqrt(1 - 4 * eps * (1 - eps - y)))^2 / (4 * eps^2) + 1
+        x = -((-1 + sqrt(1 + 4 * eps * (y + eps - 1)))^2 / (4 * eps^2) - 1)
 
-        t = sign(y) * (-1 + sqrt(1 + 4 * eps * (y + eps + sign(y))))^2 / (4 * eps^2) - 1)
+        x = sign(y) * (sqrt(1 + 4 * eps * (y + eps + sign(y))) - 1)^2 / (4 * eps^2) - 1)
         """
-        ones = tf.ones_like(t, dtype=t.dtype)
-        eps = self.scaling_epsilon * ones
-        return tf.math.sign(t) * (
-            tf.math.divide(
-                tf.math.square(
-                    -ones
-                    + tf.math.sqrt(ones + 4 * self.scaling_epsilon * (t + eps + tf.math.sign(t)))
-                ), 4 * tf.math.pow(eps, 2)
-            ) - ones)
+        eps = self.scaling_epsilon
+        if isinstance(t, np.ndarray):
+            return np.sign(t) * (
+                np.square(np.divide(
+                    np.sqrt(1 + 4 * eps * (np.abs(t) + 1 + eps)) - 1,
+                    2 * eps
+                )) - 1
+            )
+        else:
+            return tf.math.sign(t) * (
+                tf.math.square(tf.math.divide(
+                    tf.math.sqrt(1 + 4 * eps * (tf.math.abs(t) + 1 + eps)) - 1,
+                    2 * eps
+                )) - 1
+            )
 
     def value_function(self) -> TensorType:
         return self._value_out

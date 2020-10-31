@@ -83,9 +83,9 @@ class MuZeroLoss:
         #print('value preds:', value_preds.shape)
         #print('policy targets:', policy_targets.shape)
         #print('policy preds:', policy_preds.shape)
-        self.total_reward_loss = reward_loss_fn(model.scale_target(tf.identity(reward_targets)), reward_preds, model)
-        self.total_vf_loss = value_loss_fn(model.scale_target(tf.identity(value_targets)), value_preds, model)
-        self.total_policy_loss = policy_loss_fn(model.scale_target(tf.identity(policy_targets)), policy_preds)
+        self.total_reward_loss = reward_loss_fn(model.transform(tf.identity(reward_targets)), reward_preds, model)
+        self.total_vf_loss = value_loss_fn(model.transform(tf.identity(value_targets)), value_preds, model)
+        self.total_policy_loss = policy_loss_fn(model.transform(tf.identity(policy_targets)), policy_preds)
         #print('total reward:', self.total_reward_loss.shape)
         #print('total vf:', self.total_vf_loss.shape)
         #print('total_policy:', self.total_policy_loss.shape)
@@ -114,12 +114,14 @@ def mu_zero_loss(policy,
     hidden_state = model.representation(obs)
     for _ in range(policy.loss_steps):
         value, action_probs = model.prediction(hidden_state)
+        value, action_probs = model.untransform(value), model.untransform(action_probs)
         # TODO: check whether this is supposed to be the actions from the train batch
         categorical = tfp.distributions.Categorical(probs=action_probs)
         actions = categorical.sample()
         value_preds.append(value)
         policy_preds.append(action_probs)
         hidden_state, reward = model.dynamics(hidden_state, actions)
+        reward = model.untransform(reward)
         hidden_state = scale_gradient(hidden_state, 0.5)
         reward_preds.append(reward)
 
@@ -181,6 +183,7 @@ def action_distribution_fn(
     internal state outputs (or empty list if N/A)
     """
     value, action_probs = model.forward_with_value(obs_batch, is_training)
+    value, action_probs = model.untransform(value), model.untransform(action_probs)
     action_dist = rllib_tf_dist.Categorical(tf.convert_to_tensor(action_probs), model)
     actions, logp = policy.exploration.get_exploration_action(
         action_distribution=action_dist,
@@ -211,8 +214,13 @@ def mu_zero_postprocess(
     episode: Optional["MultiAgentEpisode"] = None) -> SampleBatch:
     """
     
-    rewards = sample_batch[SampleBatch.REWARDS]
-    vf_preds = policy.model.expectation_np(sample_batch[SampleBatch.VF_PREDS], policy.model.value_basis_np)
+    rewards = policy.model.untransform(sample_batch[SampleBatch.REWARDS])
+    vf_preds = policy.model.untransform(
+        policy.model.expectation_np(
+            sample_batch[SampleBatch.VF_PREDS],
+            policy.model.value_basis_np
+        )
+    )
     vf_preds = np.reshape(vf_preds, (-1,))
     
     # This calculates
@@ -238,9 +246,8 @@ def mu_zero_postprocess(
         k -= 1
         gamma_k /= policy.gamma
         value_target += t[k:N + k] * gamma_k
-    value_target = value_target.astype(np.float32)
+    value_target = policy.model.transform(value_target.astype(np.float32))
     sample_batch[Postprocessing.VALUE_TARGETS] = value_target
-    # TODO: transform value and reward targets using h()
     
     def rollout(values, default=0):
         """Matrix of shape (N, loss_steps) """
@@ -253,12 +260,13 @@ def mu_zero_postprocess(
         else:
             return np.transpose(arr, axes=(1, 0))
     
+    # TODO: Is this supposed to be untransformed?
     action_dist_inputs = sample_batch[SampleBatch.ACTION_DIST_INPUTS]
     sample_batch['rollout_values'] = rollout(value_target)
     sample_batch['rollout_rewards'] = rollout(rewards)
     sample_batch['rollout_policies'] = rollout(action_dist_inputs, default = [0] * len(action_dist_inputs[0]))
 
-    # TODO: set to None and set to max priority in replay buffer add()
+    # Setting the weight to -1 makes the weight be set to the max weight
     if PRIO_WEIGHTS not in sample_batch:
         sample_batch[PRIO_WEIGHTS] = -np.ones_like(sample_batch[SampleBatch.REWARDS])
     return sample_batch
@@ -276,9 +284,13 @@ def before_loss_init(policy, obs_space, action_space, config):
     ValueNetworkMixin.__init__(policy, obs_space, action_space, config)
     MCTSMixin.__init__(policy, obs_space, action_space, config)
 
+#from muzero.debug import tensor_stats
+
 def clip_gradients(policy, optimizer, loss):
+    #print('otpimizer:', type(optimizer))
     grads_and_vars = optimizer.compute_gradients(
         loss, policy.model.trainable_variables())
+    #print('grad stats:', [(v.name, tensor_stats(g)) for (g, v) in grads_and_vars])
     b = policy.config['grad_clip']
     if b is not None:
         grads = [g for (g, v) in grads_and_vars]
@@ -287,6 +299,10 @@ def clip_gradients(policy, optimizer, loss):
     else:
         clipped_grads = grads_and_vars
     return clipped_grads
+
+def make_optimizer(policy, config):
+    nesterov = config['nesterov'] if 'nesterov' in config else False
+    return tf.keras.optimizers.SGD(config['lr'], momentum=config['momentum'], nesterov=nesterov)
 
 def vf_preds_fetches(policy):
     """Adds value function outputs to experience sample batches."""
@@ -346,6 +362,7 @@ MuZeroTFPolicy = build_tf_policy('MuZeroTFPolicy',
                                  #before_init=before_init,
                                  before_loss_init=before_loss_init,
                                  gradients_fn=clip_gradients,
+                                 optimizer_fn=make_optimizer,
                                  postprocess_fn=mu_zero_postprocess,
                                  extra_action_fetches_fn=vf_preds_fetches,
                                  extra_learn_fetches_fn=td_error_fetches,

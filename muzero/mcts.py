@@ -217,7 +217,7 @@ class MCTS:
                 batch_state, batch_reward = self.model.dynamics(batch_state, batch_action)
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation(batch_reward, self.model.reward_basis)
-                batch_reward = self.model.unscale_target(batch_reward)
+                batch_reward = self.model.untransform(batch_reward)
                 #print('batch_state:', batch_state.shape)
                 #print('batch_reward:', batch_reward.shape)
                 #print('batchreward[0]:', batch_reward[0].shape if hasattr(batch_reward[0], 'shape') else type(batch_reward[0]))
@@ -227,10 +227,10 @@ class MCTS:
             batch_value, children_priors_logits = self.model.prediction(batch_state)
             if self.model.is_value_categorical:
                 batch_value = self.model.expectation(batch_value, self.model.value_basis)
-            batch_value = self.model.unscale_target(batch_value)
+            batch_value = self.model.untransform(batch_value)
             #print('batch_value:', batch_value.shape)
             children_priors = tf.nn.softmax(children_priors_logits)
-            children_priors = self.model.unscale_target(children_priors)
+            children_priors = self.model.untransform(children_priors)
             #print('children priors:', children_priors.shape)
             if self.add_dirichlet_noise:
                 noise = self.dirichlet.sample(1)

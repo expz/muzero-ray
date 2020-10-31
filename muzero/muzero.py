@@ -4,15 +4,13 @@ import ray
 from ray.actor import ActorHandle
 from ray.rllib.agents.trainer import with_common_config
 from ray.rllib.agents.trainer_template import build_trainer
-from ray.rllib.evaluation.worker_set import WorkerSet
 from ray.rllib.utils.actors import create_colocated
 from ray.rllib.execution.common import STEPS_TRAINED_COUNTER, _get_shared_metrics, _get_global_vars
 from ray.rllib.execution.concurrency_ops import Concurrently, Enqueue, Dequeue
 from ray.rllib.agents.dqn.learner_thread import LearnerThread
 from ray.rllib.execution.metric_ops import StandardMetricsReporting
-from ray.rllib.execution.replay_ops import SimpleReplayBuffer, Replay, StoreToReplayBuffer, WaitUntilTimestepsElapsed, MixInReplay
-from ray.rllib.execution.rollout_ops import ParallelRollouts, ConcatBatches
-from ray.rllib.execution.train_ops import TrainOneStep, UpdateTargetNetwork
+from ray.rllib.execution.replay_ops import Replay, StoreToReplayBuffer
+from ray.rllib.execution.rollout_ops import ParallelRollouts
 from ray.rllib.policy.sample_batch import SampleBatch
 from ray.rllib.utils.types import SampleBatchType
 import tensorflow as tf
@@ -107,7 +105,7 @@ ATARI_DEFAULT_CONFIG = with_common_config({
         ],
         'prediction': [
             (1, 'conv', 256, (3, 3), (1, 1)),
-            (19, 'res', 256, (3, 3), (1, 1)),
+            #(19, 'res', 256, (3, 3), (1, 1)),
         ],
         'value_head': [
             (1, 'conv', 1, (1, 1), (1, 1)),
@@ -127,9 +125,9 @@ ATARI_DEFAULT_CONFIG = with_common_config({
     'input_steps': 32,
     'loss_steps': 5,
     'n_step': 10,
-    'lr': 0.05,
+    'lr': 0.0005,
     'lr_schedule': None,
-    'adam_epsilon': 1e-8,
+    'momentum': 0.9,
     'l2_reg': 1e-4,
     'gamma': 0.997,
     # The epsilon used in the formula for the invertible transform of model outputs.
@@ -148,18 +146,15 @@ ATARI_DEFAULT_CONFIG = with_common_config({
     'minibatch_buffer_size': 1,
     'num_sgd_iter': 1,
     'learner_queue_size': 16,
-    'learner_queue_timeout': 300,
+    'learner_queue_timeout': 60,
     'broadcast_interval': 1,
     'max_sample_requests_in_flight_per_worker': 2,
-    # set >0 to enable experience replay. Saved samples will be replayed with
-    # a p:1 proportion to new data samples.
-    'replay_proportion': 1,
     'prioritized_replay_alpha': 1,
     'prioritized_replay_beta': 1,
     'prioritized_replay_eps': 1e-6,
     'mcts': {
         'reset_q_bounds_per_node': True,
-        'add_dirichlet_noise': False,
+        'add_dirichlet_noise': True,
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.25,
         'num_simulations': 10,
