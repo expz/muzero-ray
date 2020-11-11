@@ -224,11 +224,11 @@ class MuZeroTFModelV2(TFModelV2):
 
     @staticmethod
     def expectation(categorical: TensorType, basis: TensorType) -> TensorType:
-        return tf.tensordot(categorical, basis, axes=[[1], [0]])
+        return tf.tensordot(categorical, basis, axes=[[-1], [0]])
     
     @staticmethod
     def expectation_np(categorical: np.ndarray, basis: np.ndarray) -> np.ndarray:
-        return np.tensordot(categorical, basis, axes=[[1], [0]])
+        return np.tensordot(categorical, basis, axes=[[-1], [0]])
 
     @staticmethod
     def scalar_to_categorical(t: TensorType, bound: int) -> TensorType:
@@ -243,29 +243,25 @@ class MuZeroTFModelV2(TFModelV2):
         a == lub(t) - t
         b == t - glb(t)
         """
-        #print('t shape:', t.shape)
+        t_clipped = tf.clip_by_value(t, -bound, bound - 1e-8)
         shape = tf.concat([tf.shape(t), tf.constant([2 * bound + 1])], 0)
-        t_clipped = tf.clip_by_value(t, -bound, bound)
+        dtype = t_clipped.dtype
+
         # Negative numbers round toward zero (up). Make them non-negative to fix.
-        indices_l = tf.clip_by_value(
-            tf.cast(t_clipped + tf.cast(tf.identity(bound), dtype=t.dtype), tf.int32),
-            -bound,
-            bound) - tf.identity(bound)
-        indices_u = tf.clip_by_value(indices_l + tf.identity(1), -bound, bound)
+        indices_l = tf.cast(t_clipped + tf.cast(tf.identity(bound), dtype=dtype), tf.int32) - tf.identity(bound)
+        indices_u = indices_l + 1
 
         # TODO: precompute tile and repeat
-        dtype = t_clipped.dtype
         left = tf.reshape(tf.cast(indices_u, dtype) - t_clipped, (-1,))
         right = tf.reshape(t_clipped - tf.cast(indices_l, dtype), (-1,))
 
         def zip_with_indices(u, x, y):
             return tf.transpose(tf.stack([
-                tf.tile(tf.range(x), tf.reshape(y, (1,))),
-                tf.repeat(tf.range(y), tf.reshape(x, (1,))),
+                tf.repeat(tf.range(x), tf.reshape(y, (1,))),
+                tf.tile(tf.range(y), tf.reshape(x, (1,))),
                 tf.reshape(u, (-1,))
             ]))
-        
-        #print('indices_l shape', indices_l.shape)
+
         indices_l = zip_with_indices(indices_l + bound, tf.shape(t)[0], tf.shape(t)[1])
         indices_u = zip_with_indices(indices_u + bound, tf.shape(t)[0], tf.shape(t)[1])
         return tf.scatter_nd(indices_l, left, shape) + tf.scatter_nd(indices_u, right, shape)

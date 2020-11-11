@@ -84,7 +84,7 @@ class MuZeroLoss:
         #print('policy targets:', policy_targets.shape)
         #print('policy preds:', policy_preds.shape)
         self.total_reward_loss = reward_loss_fn(model.transform(tf.identity(reward_targets)), reward_preds, model)
-        self.total_vf_loss = value_loss_fn(model.transform(tf.identity(value_targets)), value_preds, model)
+        self.total_vf_loss = model.config['value_loss_weight'] * value_loss_fn(model.transform(tf.identity(value_targets)), value_preds, model)
         self.total_policy_loss = policy_loss_fn(model.transform(tf.identity(policy_targets)), policy_preds)
         #print('total reward:', self.total_reward_loss.shape)
         #print('total vf:', self.total_vf_loss.shape)

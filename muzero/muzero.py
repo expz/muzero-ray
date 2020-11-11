@@ -133,6 +133,7 @@ ATARI_DEFAULT_CONFIG = with_common_config({
     # The epsilon used in the formula for the invertible transform of model outputs.
     'scaling_epsilon': 0.001,
     'grad_clip': 40.0,
+    'value_loss_weight': 0.25,  # See Reanalyze appendix
     'train_batch_size': 32,
     # The max number of observations the replay buffer can store.
     'buffer_size': 65536,
@@ -171,6 +172,9 @@ ATARI_DEFAULT_CONFIG = with_common_config({
 
 # Update worker weights as they finish generating experiences.
 class BroadcastUpdateLearnerWeights:
+    """
+    Adapted from https://github.com/ray-project/ray/blob/5acd3e66ddc1d7a1af6590567fcc3df95169d8a2/rllib/agents/impala/impala.py#L177
+    """
     def __init__(self, learner_thread, workers, broadcast_interval):
         self.learner_thread = learner_thread
         self.steps_since_broadcast = collections.defaultdict(int)
