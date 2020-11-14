@@ -67,7 +67,7 @@ class MuZeroLoss:
         self.mean_entropy = tf.identity(0.)
         # loop through time steps
         for policy_pred in policy_preds:
-            action_dist = dist_class(policy_pred, model)
+            action_dist = dist_class(model.untransform(tf.identity(policy_pred)), model)
             self.mean_entropy += tf.reduce_mean(action_dist.entropy())
         # once done with looping, convert it to a tensor
         policy_preds = tf.transpose(tf.convert_to_tensor(policy_preds), perm=(1, 0, 2))
@@ -114,14 +114,12 @@ def mu_zero_loss(policy,
     hidden_state = model.representation(obs)
     for _ in range(policy.loss_steps):
         value, action_probs = model.prediction(hidden_state)
-        value, action_probs = model.untransform(value), model.untransform(action_probs)
         # TODO: check whether this is supposed to be the actions from the train batch
         categorical = tfp.distributions.Categorical(probs=action_probs)
         actions = categorical.sample()
         value_preds.append(value)
         policy_preds.append(action_probs)
         hidden_state, reward = model.dynamics(hidden_state, actions)
-        reward = model.untransform(reward)
         hidden_state = scale_gradient(hidden_state, 0.5)
         reward_preds.append(reward)
 
@@ -246,7 +244,7 @@ def mu_zero_postprocess(
         k -= 1
         gamma_k /= policy.gamma
         value_target += t[k:N + k] * gamma_k
-    value_target = policy.model.transform(value_target.astype(np.float32))
+    value_target = value_target.astype(np.float32)
     sample_batch[Postprocessing.VALUE_TARGETS] = value_target
     
     def rollout(values, default=0):
