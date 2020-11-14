@@ -5,7 +5,7 @@ gym
 numpy
 pandas
 pillow
-ray[rllib]
+ray[rllib]==0.8.7
 sortedcontainers
 tensorboardX
 tensorflow-gpu
