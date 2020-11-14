@@ -243,7 +243,7 @@ class MuZeroTFModelV2(TFModelV2):
         a == lub(t) - t
         b == t - glb(t)
         """
-        t_clipped = tf.clip_by_value(t, -bound, bound - 1e-8)
+        t_clipped = tf.clip_by_value(t, -bound, bound)
         shape = tf.concat([tf.shape(t), tf.constant([2 * bound + 1])], 0)
         dtype = t_clipped.dtype
 
@@ -264,6 +264,11 @@ class MuZeroTFModelV2(TFModelV2):
 
         indices_l = zip_with_indices(indices_l + bound, tf.shape(t)[0], tf.shape(t)[1])
         indices_u = zip_with_indices(indices_u + bound, tf.shape(t)[0], tf.shape(t)[1])
+
+        in_bounds = indices_u[:, 2] < 2 * bound + 1
+        indices_u = tf.boolean_mask(indices_u, in_bounds)
+        right = tf.boolean_mask(right, in_bounds)
+
         return tf.scatter_nd(indices_l, left, shape) + tf.scatter_nd(indices_u, right, shape)
     
     def forward(self, input_dict: Dict[str, Any], state: List[Any], seq_lens: Any) -> Tuple[TensorType, List[Any]]:
