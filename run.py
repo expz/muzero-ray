@@ -11,7 +11,8 @@ import ray
 from ray import tune
 
 from muzero.env import register_muzero_env
-from muzero.muzero import ATARI_DEFAULT_CONFIG, MuZeroTrainer
+from muzero.muzero import ATARI_DEFAULT_CONFIG
+from muzero.trainer import MuZeroTrainer
 
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,11 @@ if __name__ == "__main__":
         choices=['debug', 'info', 'warning', 'error', 'critical'],
         default='info',
         help='level of log to print'
+    )
+    parser.add_argument(
+        '--config',
+        type=str,
+        help='path to JSON config file to override defaults'
     )
     args = parser.parse_args()
 
