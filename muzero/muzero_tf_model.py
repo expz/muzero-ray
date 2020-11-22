@@ -319,7 +319,12 @@ class MuZeroTFModelV2(TFModelV2):
         
     def representation(self, obs_batch: TensorType) -> TensorType:
         """obs should be of shape (batch_size, 32*4, screen_x, screen_y)"""
-        return self.representation_net(obs_batch)
+        hidden_state = self.representation_net(obs_batch)
+        # See Appendix G.
+        s_max = tf.math.reduce_max(hidden_state)
+        s_min = tf.math.reduce_min(hidden_state)
+        hidden_state = (hidden_state - s_min) / (s_max - s_min)
+        return hidden_state
     
     def prediction(self, hidden_state: TensorType) -> Tuple[TensorType, TensorType]:
         """hidden_state should be of shape (batch_size,) + self.state_shape"""
@@ -329,4 +334,9 @@ class MuZeroTFModelV2(TFModelV2):
     def dynamics(self, hidden_state: TensorType, action_batch: TensorType) -> Tuple[TensorType, TensorType]:
         """action should be of shape (batch_size) + self.state_shape[:-1]"""
         action_t = self._encode_atari_actions(action_batch)
-        return self.dynamics_net((hidden_state, action_t))
+        new_hidden_state, reward = self.dynamics_net((hidden_state, action_t))
+        # See Appendix G.
+        s_max = tf.math.reduce_max(new_hidden_state)
+        s_min = tf.math.reduce_min(new_hidden_state)
+        new_hidden_state = (new_hidden_state - s_min) / (s_max - s_min)
+        return new_hidden_state, reward

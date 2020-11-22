@@ -67,7 +67,7 @@ class MuZeroLoss:
         self.mean_entropy = tf.identity(0.)
         # loop through time steps
         for policy_pred in policy_preds:
-            action_dist = dist_class(model.untransform(tf.identity(policy_pred)), model)
+            action_dist = dist_class(tf.identity(policy_pred), model)
             self.mean_entropy += tf.reduce_mean(action_dist.entropy())
         # once done with looping, convert it to a tensor
         policy_preds = tf.transpose(tf.convert_to_tensor(policy_preds), perm=(1, 0, 2))
@@ -83,9 +83,9 @@ class MuZeroLoss:
         #print('value preds:', value_preds.shape)
         #print('policy targets:', policy_targets.shape)
         #print('policy preds:', policy_preds.shape)
-        self.total_reward_loss = reward_loss_fn(model.transform(tf.identity(reward_targets)), reward_preds, model)
-        self.total_vf_loss = model.config['value_loss_weight'] * value_loss_fn(model.transform(tf.identity(value_targets)), value_preds, model)
-        self.total_policy_loss = policy_loss_fn(model.transform(tf.identity(policy_targets)), policy_preds)
+        self.total_reward_loss = reward_loss_fn(tf.identity(reward_targets), reward_preds, model)
+        self.total_vf_loss = model.config['value_loss_weight'] * value_loss_fn(tf.identity(value_targets), value_preds, model)
+        self.total_policy_loss = policy_loss_fn(tf.identity(policy_targets), policy_preds)
         #print('total reward:', self.total_reward_loss.shape)
         #print('total vf:', self.total_vf_loss.shape)
         #print('total_policy:', self.total_policy_loss.shape)
@@ -107,19 +107,21 @@ def mu_zero_loss(policy,
                  dist_class: type,  # e.g., ray.rllib.models.tf.tf_action_dist.Categorical
                  train_batch: Dict[str, TensorType]) -> TensorType:
     obs = train_batch[SampleBatch.CUR_OBS]
+    actions = train_batch[SampleBatch.ACTIONS]
+    #if len(list(actions.shape)) < 2:
+    #    actions = tf.convert_to_tensor([actions])
     
     reward_preds = []
     value_preds = []
     policy_preds = []
     hidden_state = model.representation(obs)
-    for _ in range(policy.loss_steps):
+    for i in range(policy.loss_steps):
         value, action_probs = model.prediction(hidden_state)
-        # TODO: check whether this is supposed to be the actions from the train batch
-        categorical = tfp.distributions.Categorical(probs=action_probs)
-        actions = categorical.sample()
         value_preds.append(value)
         policy_preds.append(action_probs)
-        hidden_state, reward = model.dynamics(hidden_state, actions)
+        # j is a workaround for rllib passing in malformed batch at initialization.
+        #j = min(i, actions.shape[1] - 1)
+        hidden_state, reward = model.dynamics(hidden_state, actions[:, i])
         hidden_state = scale_gradient(hidden_state, 0.5)
         reward_preds.append(reward)
 
@@ -181,7 +183,7 @@ def action_distribution_fn(
     internal state outputs (or empty list if N/A)
     """
     value, action_probs = model.forward_with_value(obs_batch, is_training)
-    value, action_probs = model.untransform(value), model.untransform(action_probs)
+    value = model.untransform(value)
     action_dist = rllib_tf_dist.Categorical(tf.convert_to_tensor(action_probs), model)
     actions, logp = policy.exploration.get_exploration_action(
         action_distribution=action_dist,
@@ -245,12 +247,12 @@ def mu_zero_postprocess(
         gamma_k /= policy.gamma
         value_target += t[k:N + k] * gamma_k
     value_target = value_target.astype(np.float32)
-    sample_batch[Postprocessing.VALUE_TARGETS] = value_target
+    sample_batch[Postprocessing.VALUE_TARGETS] = policy.model.transform(value_target)
     
-    def rollout(values, default=0):
+    def rollout(values):
         """Matrix of shape (N, loss_steps) """
         arr = np.array([
-            values if i == 0 else np.concatenate((values[i:], [default for _ in range(min(i, N))]))
+            values if i == 0 else np.concatenate((values[i:], [values[-1] for _ in range(min(i, N))]))
             for i in range(policy.loss_steps)
         ])
         if len(arr.shape) == 3:
@@ -258,11 +260,12 @@ def mu_zero_postprocess(
         else:
             return np.transpose(arr, axes=(1, 0))
     
-    # TODO: Is this supposed to be untransformed?
     action_dist_inputs = sample_batch[SampleBatch.ACTION_DIST_INPUTS]
-    sample_batch['rollout_values'] = rollout(value_target)
-    sample_batch['rollout_rewards'] = rollout(rewards)
-    sample_batch['rollout_policies'] = rollout(action_dist_inputs, default = [0] * len(action_dist_inputs[0]))
+    sample_batch[SampleBatch.ACTIONS] = rollout(sample_batch[SampleBatch.ACTIONS])
+    sample_batch['rollout_values'] = policy.model.transform(rollout(value_target))
+    sample_batch['rollout_rewards'] = policy.model.transform(rollout(rewards))
+    #sample_batch['rollout_policies'] = rollout(action_dist_inputs, default = [0] * len(action_dist_inputs[0]))
+    sample_batch['rollout_policies'] = rollout(action_dist_inputs)
 
     # Setting the weight to -1 makes the weight be set to the max weight
     if PRIO_WEIGHTS not in sample_batch:

@@ -81,21 +81,21 @@ ATARI_DEFAULT_CONFIG = with_common_config({
             (1, 'avg_pool', None, (3, 3), (2, 2)),
             (2, 'res', 256, (3, 3), (1, 1)),
             (1, 'avg_pool', None, (3, 3), (2, 2)),
+            (16, 'res', 256, (3, 3), (1, 1)),
         ],
         'dynamics': [
             (1, 'conv', 256, (3, 3), (1, 1)),
             (16, 'res', 256, (3, 3), (1, 1)),
         ],
         'prediction': [
-            (1, 'conv', 256, (3, 3), (1, 1)),
-            #(19, 'res', 256, (3, 3), (1, 1)),
+            (1, 'conv', 128, (1, 1), (1, 1)),
         ],
         'value_head': [
             (1, 'conv', 1, (1, 1), (1, 1)),
             (1, 'fc', 256, None, None),
         ],
         'policy_head': [
-            (1, 'conv', 256, (3, 3), (1, 1)),
+            (1, 'conv', 64, (1, 1), (1, 1)),
         ],
     },
     'action_type': 'atari',
@@ -105,10 +105,11 @@ ATARI_DEFAULT_CONFIG = with_common_config({
     'reward_type': 'categorical',
     'reward_max': 300,
     'policy_type': 'fc',
-    'input_steps': 32,
+    'input_steps': 32,  # Number of frames per input
+    'n_channels': 4,  # Number of channels per frame
     'loss_steps': 5,
     'n_step': 10,
-    'lr': 0.0005,
+    'lr': 0.001,
     'lr_schedule': None,
     'momentum': 0.9,
     'l2_reg': 1e-4,

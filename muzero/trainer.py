@@ -1,7 +1,9 @@
 import collections
 import copy
 import datetime
+from muzero.muzero import ATARI_DEFAULT_CONFIG, BOARD_DEFAULT_CONFIG
 import os
+import pickle
 import tempfile
 from typing import Callable, Tuple
 
@@ -19,6 +21,7 @@ from ray.rllib.utils.actors import create_colocated
 from ray.tune import Trainable
 from ray.tune.logger import Logger, UnifiedLogger
 from ray.tune.registry import ENV_CREATOR, _global_registry
+from ray.tune.resources import Resources
 from ray.tune.result import DEFAULT_RESULTS_DIR
 from ray.util.iter import LocalIterator
 import tensorflow as tf
@@ -99,19 +102,22 @@ class MuZeroTrainer(Trainable):
         # Create a number of replay buffer actors.
         num_replay_buffer_shards = self.config["optimizer"]["num_replay_buffer_shards"]
 
+        n_channels = self.config['n_channels']
+        loss_steps = self.config['loss_steps']
+        action_count = self.env_creator({}).action_space.n
         tensor_spec = (
-            tf.TensorSpec((96, 96, 4), tf.float32, SampleBatch.CUR_OBS),
+            tf.TensorSpec((96, 96, n_channels), tf.float32, SampleBatch.CUR_OBS),
             tf.TensorSpec((1,), tf.int32, SampleBatch.EPS_ID),
             tf.TensorSpec((1,), tf.int32, SampleBatch.UNROLL_ID),
-            tf.TensorSpec((1,), tf.int32, SampleBatch.ACTIONS),
-            tf.TensorSpec((4,), tf.float32, SampleBatch.ACTION_DIST_INPUTS),
+            tf.TensorSpec((loss_steps,), tf.int32, SampleBatch.ACTIONS),
+            tf.TensorSpec((action_count,), tf.float32, SampleBatch.ACTION_DIST_INPUTS),
             tf.TensorSpec((1,), tf.float32, SampleBatch.ACTION_PROB),
             tf.TensorSpec((1,), tf.float32, SampleBatch.ACTION_LOGP),
             tf.TensorSpec((1,), tf.bool, SampleBatch.DONES),
             tf.TensorSpec((1,), tf.float32, SampleBatch.REWARDS),
-            tf.TensorSpec((5, 4), tf.float32, 'rollout_policies'),
-            tf.TensorSpec((5,), tf.float32, 'rollout_rewards'),
-            tf.TensorSpec((5,), tf.float32, 'rollout_values'),
+            tf.TensorSpec((loss_steps, action_count), tf.float32, 'rollout_policies'),
+            tf.TensorSpec((loss_steps,), tf.float32, 'rollout_rewards'),
+            tf.TensorSpec((loss_steps,), tf.float32, 'rollout_values'),
         )
 
         # There's no way to control where the ReplayActors are located in a multi-node setup, so
@@ -143,7 +149,7 @@ class MuZeroTrainer(Trainable):
         def update_prio_and_stats(item: Tuple[ActorHandle, dict, int]) -> None:
             actor, prio_dict, count = item
             #print('actor', type(actor), actor)
-            #print('prio_dict:', type(prio_dict), prio_dict)
+            print('prio_dict:', type(prio_dict), prio_dict)
             #print('count:', type(count), count)
             actor.update_priorities.remote(prio_dict)
             metrics = LocalIterator.get_metrics()
@@ -248,3 +254,64 @@ class MuZeroTrainer(Trainable):
 
     def step(self):
         return next(self._global_op)
+
+    def cleanup(self):
+        if hasattr(self, "workers"):
+            self.workers.stop()
+        if hasattr(self, "optimizer") and self.optimizer:
+            self.optimizer.stop()
+
+    def save_checkpoint(self, checkpoint_dir: str) -> str:
+        checkpoint_path = os.path.join(checkpoint_dir,
+                                       "checkpoint-{}".format(self.iteration))
+        pickle.dump(self.__getstate__(), open(checkpoint_path, "wb"))
+
+        return checkpoint_path
+
+    def load_checkpoint(self, checkpoint_path: str):
+        extra_data = pickle.load(open(checkpoint_path, "rb"))
+        self.__setstate__(extra_data)
+
+    def __getstate__(self) -> dict:
+        state = {}
+        if hasattr(self, "workers"):
+            state["worker"] = self.workers.local_worker().save()
+        if hasattr(self, "optimizer") and hasattr(self.optimizer, "save"):
+            state["optimizer"] = self.optimizer.save()
+        return state
+
+    def __setstate__(self, state: dict):
+        if "worker" in state:
+            self.workers.local_worker().restore(state["worker"])
+            remote_state = ray.put(state["worker"])
+            for r in self.workers.remote_workers():
+                r.restore.remote(remote_state)
+        if "optimizer" in state:
+            self.optimizer.restore(state["optimizer"])
+
+    @classmethod
+    def default_resource_request(
+            cls, config: dict) -> Resources:
+        cf = dict(cls._default_config(config.get('action_type', None)), **config)
+        num_workers = cf["num_workers"] + cf["evaluation_num_workers"]
+        # TODO(ekl): add custom resources here once tune supports them
+        return Resources(
+            cpu=cf["num_cpus_for_driver"],
+            gpu=cf["num_gpus"],
+            memory=cf["memory"],
+            object_store_memory=cf["object_store_memory"],
+            extra_cpu=cf["num_cpus_per_worker"] * num_workers,
+            extra_gpu=cf["num_gpus_per_worker"] * num_workers,
+            extra_memory=cf["memory_per_worker"] * num_workers,
+            extra_object_store_memory=cf["object_store_memory_per_worker"] *
+            num_workers)
+
+    @classmethod
+    def _default_config(cls, action_type):
+        if action_type == 'atari' or action_type is None:
+            return ATARI_DEFAULT_CONFIG
+        elif action_type == 'board':
+            return BOARD_DEFAULT_CONFIG
+        else:
+            raise Exception(f"Unknown action type: {action_type}")
+        
