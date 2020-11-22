@@ -149,7 +149,7 @@ class MuZeroTrainer(Trainable):
         def update_prio_and_stats(item: Tuple[ActorHandle, dict, int]) -> None:
             actor, prio_dict, count = item
             #print('actor', type(actor), actor)
-            print('prio_dict:', type(prio_dict), prio_dict)
+            #print('prio_dict:', type(prio_dict), prio_dict)
             #print('count:', type(count), count)
             actor.update_priorities.remote(prio_dict)
             metrics = LocalIterator.get_metrics()
