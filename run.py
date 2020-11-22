@@ -33,15 +33,16 @@ def main(args):
 
   config = {
       'env': 'BreakoutNoFrameskip-MuZero-v1',
+      'action_type': 'atari',
       'num_workers': 3,
       'num_gpus': 1,
+      'num_gpus_per_worker': 0,
       'log_level': 'WARNING',
-      'learning_starts': 800,
-      'train_batch_size': 32,
+      'learning_starts': 1024,
       'timesteps_per_iteration': 1024,
       'buffer_size': 65536,
       'optimizer': {
-          'num_replay_buffer_shards': 2,
+          'num_replay_buffer_shards': 1,
           'debug': False,
       },
   }
