@@ -230,7 +230,6 @@ class MCTS:
             batch_value = self.model.untransform(batch_value)
             #print('batch_value:', batch_value.shape)
             children_priors = tf.nn.softmax(children_priors_logits)
-            children_priors = self.model.untransform(children_priors)
             #print('children priors:', children_priors.shape)
             if self.add_dirichlet_noise:
                 noise = self.dirichlet.sample(1)
