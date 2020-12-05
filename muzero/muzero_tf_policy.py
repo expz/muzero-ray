@@ -1,13 +1,9 @@
 import gym
 import numpy as np
-from numpy.lib.index_tricks import AxisConcatenator
-from ray.rllib.agents.trainer import with_common_config
 from ray.rllib.evaluation.postprocessing import Postprocessing
 from ray.rllib.models.modelv2 import ModelV2
-from ray.rllib.models.tf.recurrent_net import RecurrentNetwork
 import ray.rllib.models.tf.tf_action_dist as rllib_tf_dist
-from ray.rllib.models.tf.tf_modelv2 import TFModelV2
-from ray.rllib.policy import Policy, TFPolicy
+from ray.rllib.policy import Policy
 from ray.rllib.policy.tf_policy_template import build_tf_policy
 from ray.rllib.policy.sample_batch import SampleBatch
 from ray.rllib.utils.annotations import override
@@ -71,6 +67,7 @@ class MuZeroLoss:
             self.mean_entropy += tf.reduce_mean(action_dist.entropy())
         # once done with looping, convert it to a tensor
         policy_preds = tf.transpose(tf.convert_to_tensor(policy_preds), perm=(1, 0, 2))
+        policy_preds = tf.nn.softmax(policy_preds)
 
         K = int(reward_targets.shape[1])
         w = [1.]
@@ -184,13 +181,15 @@ def action_distribution_fn(
     """
     value, action_probs = model.forward_with_value(obs_batch, is_training)
     value = model.untransform(value)
+    # Categorical assumes logits.
     action_dist = rllib_tf_dist.Categorical(tf.convert_to_tensor(action_probs), model)
     actions, logp = policy.exploration.get_exploration_action(
         action_distribution=action_dist,
         timestep=timestep,
-        explore=explore
+        explore=False
     )
     t = tf.gather(action_probs, actions, axis=1, batch_dims=1)
+    action_probs = tf.nn.softmax(tf.convert_to_tensor(action_probs), axis=-1)
     policy.last_extra_fetches = {
         SampleBatch.ACTION_PROB: tf.gather(action_probs, actions, axis=1, batch_dims=1),
         SampleBatch.VF_PREDS: tf.convert_to_tensor(value)
@@ -262,10 +261,13 @@ def mu_zero_postprocess(
     
     action_dist_inputs = sample_batch[SampleBatch.ACTION_DIST_INPUTS]
     sample_batch[SampleBatch.ACTIONS] = rollout(sample_batch[SampleBatch.ACTIONS])
-    sample_batch['rollout_values'] = policy.model.transform(rollout(value_target))
-    sample_batch['rollout_rewards'] = policy.model.transform(rollout(rewards))
+    sample_batch['rollout_values'] = rollout(value_target)
+    sample_batch['rollout_rewards'] = rollout(rewards)
     #sample_batch['rollout_policies'] = rollout(action_dist_inputs, default = [0] * len(action_dist_inputs[0]))
+    s = np.sum(action_dist_inputs, axis=-1)
+    assert np.sum(np.abs(s - np.ones(s.shape))) < 1e-3
     sample_batch['rollout_policies'] = rollout(action_dist_inputs)
+    sample_batch['is_training'] = [True] * rewards.shape[0]
 
     # Setting the weight to -1 makes the weight be set to the max weight
     if PRIO_WEIGHTS not in sample_batch:

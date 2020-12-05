@@ -34,11 +34,11 @@ def main(args):
   config = {
       'env': 'BreakoutNoFrameskip-MuZero-v1',
       'action_type': 'atari',
-      'num_workers': 3,
+      'num_workers': 7,
       'num_gpus': 1,
       'num_gpus_per_worker': 0,
       'log_level': 'WARNING',
-      'learning_starts': 1024,
+      'learning_starts': 512,
       'timesteps_per_iteration': 1024,
       'buffer_size': 65536,
       'optimizer': {
@@ -56,7 +56,7 @@ def main(args):
       pass
 
   #ray.init(local_mode=True)
-  ray.init(num_cpus=6, num_gpus=1)
+  ray.init(num_cpus=9, num_gpus=1)
   try:
       tune.run(
           MuZeroTrainer,

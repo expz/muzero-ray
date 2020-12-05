@@ -148,7 +148,7 @@ ATARI_DEFAULT_CONFIG = with_common_config({
         'puct_c2': 19652,
     },
     'optimizer': {
-        'num_replay_buffer_shards': 2,
+        'num_replay_buffer_shards': 1,
         'debug': False,
     },
 })

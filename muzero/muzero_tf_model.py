@@ -105,7 +105,7 @@ class MuZeroTFModelV2(TFModelV2):
         num_nodes = np.prod(tuple(output.shape[1:]))
         output = tf.keras.layers.Reshape((num_nodes,))(output)
         output = tf.keras.layers.Dense(self.num_outputs)(output)
-        output = tf.keras.layers.Softmax()(output)
+        # output = tf.keras.layers.Softmax()(output)
         return output
     
     def _scalar_head(self, last_layer: tf.keras.layers.Layer, config: Dict[str, Any], name: str = 'value') -> tf.keras.layers.Layer:
@@ -120,7 +120,7 @@ class MuZeroTFModelV2(TFModelV2):
         if config[f'{name}_type'] == 'categorical':
             output = tf.keras.layers.Dense(2 * config[f'{name}_max'] + 1)(output)
         elif config[f'{name}_type'] == 'scalar':
-            output = tf.keras.layers.Dense(1)(output)
+            output = tf.keras.layers.Dense(1, activation='tanh')(output)
         else:
             raise NotImplemented(f'{name}_type "{config[name + "_type"]}" unknown')
         return output
@@ -273,7 +273,9 @@ class MuZeroTFModelV2(TFModelV2):
     
     def forward(self, input_dict: Dict[str, Any], state: List[Any], seq_lens: Any) -> Tuple[TensorType, List[Any]]:
         """
-        WARNING: This outputs policy as probabilities if training and as logits if not training.
+        WARNING: This outputs policy as probabilities if not training and as logits if training.
+
+        This is called by the learner thread.
         
         Arguments:
             input_dict (dict): dictionary of input tensors, including "obs",
@@ -292,29 +294,34 @@ class MuZeroTFModelV2(TFModelV2):
         # Convert boolean tensor to Python bool
         if isinstance(is_training, tf.Tensor):
             is_training = tf.keras.backend.eval(is_training)
+
+        # Hack because it's not getting set to True.
+        is_training = True
         
         if is_training:
-            value, policy, actions = self.mcts.compute_action(input_dict[SampleBatch.CUR_OBS])
-        else:
             # For Atari, obs should be of size (batch_size, screen_x, screen_y, self.input_steps*4).
             hidden_state = self.representation(input_dict[SampleBatch.CUR_OBS])
             value, policy = self.prediction(hidden_state)
+        else:
+            value, policy, actions = self.mcts.compute_action(input_dict[SampleBatch.CUR_OBS])
         return policy, state
 
     def forward_with_value(self, obs: TensorType, is_training: bool = False) -> Tuple[TensorType, TensorType]:
         """
-        WARNING: This outputs policy as probabilities if training and as logits if not training.
+        WARNING: This outputs policy as probabilities if not training and as logits if training.
+
+        This is called by the rollout workers.
         """
         # Convert boolean tensor to Python bool
         if isinstance(is_training, tf.Tensor):
             is_training = tf.keras.backend.eval(is_training)
 
         if is_training:
-            value, policy, actions = self.mcts.compute_action(obs)
-        else:
             # For Atari, obs should be of size (batch_size, screen_x, screen_y, self.input_steps*4).
             hidden_state = self.representation(obs)
             value, policy = self.prediction(hidden_state)
+        else:
+            value, policy, actions = self.mcts.compute_action(obs)
         return value, policy
         
     def representation(self, obs_batch: TensorType) -> TensorType:
