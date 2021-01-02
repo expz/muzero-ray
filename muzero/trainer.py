@@ -1,23 +1,16 @@
+from __future__ import annotations
+
 import collections
 import copy
 import datetime
-from muzero.muzero import ATARI_DEFAULT_CONFIG, BOARD_DEFAULT_CONFIG
 import os
 import pickle
 import tempfile
+import time
 from typing import Callable, Tuple
 
 import ray
 from ray.actor import ActorHandle
-from ray.rllib.agents.dqn.learner_thread import LearnerThread
-from ray.rllib.evaluation.worker_set import WorkerSet
-from ray.rllib.execution.common import STEPS_SAMPLED_COUNTER, STEPS_TRAINED_COUNTER
-from ray.rllib.execution.concurrency_ops import Concurrently, Enqueue, Dequeue
-from ray.rllib.execution.metric_ops import StandardMetricsReporting
-from ray.rllib.execution.replay_ops import Replay, StoreToReplayBuffer
-from ray.rllib.execution.rollout_ops import ParallelRollouts
-from ray.rllib.policy.sample_batch import SampleBatch
-from ray.rllib.utils.actors import create_colocated
 from ray.tune import Trainable
 from ray.tune.logger import Logger, UnifiedLogger
 from ray.tune.registry import ENV_CREATOR, _global_registry
@@ -26,7 +19,17 @@ from ray.tune.result import DEFAULT_RESULTS_DIR
 from ray.util.iter import LocalIterator
 import tensorflow as tf
 
+from muzero.learner_thread import LearnerThread
+from muzero.muzero import ATARI_DEFAULT_CONFIG, BOARD_DEFAULT_CONFIG
+from muzero.ops.concurrency_ops import Concurrently, Enqueue, Dequeue
+from muzero.ops.metric_ops import StandardMetricsReporting
+from muzero.ops.replay_ops import Replay, StoreToReplayBuffer, CalculatePriorities
+from muzero.ops.rollout_ops import ParallelRollouts
+from muzero.policy import STEPS_SAMPLED_COUNTER, STEPS_TRAINED_COUNTER
 from muzero.replay_buffer import ReplayActor, PRIO_WEIGHTS
+from muzero.sample_batch import SampleBatch
+from muzero.util import create_colocated
+from muzero.worker_set import WorkerSet
 
 
 # Update worker weights as they finish generating experiences.
@@ -67,6 +70,8 @@ class MuZeroTrainer(Trainable):
         From https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/agents/trainer.py
         """
         self._env_id = env or config['env']
+
+        tf.get_logger().setLevel(config['log_level'])
 
         if logger_creator is None:
             timestr = datetime.today().strftime("%Y-%m-%d_%H-%M-%S")
@@ -110,7 +115,7 @@ class MuZeroTrainer(Trainable):
             tf.TensorSpec((1,), tf.int32, SampleBatch.EPS_ID),
             tf.TensorSpec((1,), tf.int32, SampleBatch.UNROLL_ID),
             tf.TensorSpec((loss_steps,), tf.int32, SampleBatch.ACTIONS),
-            tf.TensorSpec((action_count,), tf.float32, SampleBatch.ACTION_DIST_INPUTS),
+            tf.TensorSpec((action_count,), tf.float32, 'action_dist_probs'),
             tf.TensorSpec((1,), tf.float32, SampleBatch.ACTION_PROB),
             tf.TensorSpec((1,), tf.float32, SampleBatch.ACTION_LOGP),
             tf.TensorSpec((1,), tf.bool, SampleBatch.DONES),
@@ -133,7 +138,7 @@ class MuZeroTrainer(Trainable):
             self.config["prioritized_replay_beta"],
             self.config["prioritized_replay_eps"],
             self.config["multiagent"]["replay_mode"],
-            self.config["replay_sequence_length"],
+            1,  # replay_sequence_length
         ], num_replay_buffer_shards)
         
         # Start the learner thread on the local host (where the ReplayActors are located).
@@ -168,7 +173,8 @@ class MuZeroTrainer(Trainable):
             workers,
             mode="async",
             num_async=self.config['max_sample_requests_in_flight_per_worker'])
-        store_op = rollouts.for_each(StoreToReplayBuffer(actors=replay_actors))
+        store_op = rollouts.for_each(CalculatePriorities(self.config['n_step'], self.config['gamma'])) \
+            .for_each(StoreToReplayBuffer(actors=replay_actors))
 
         if workers.remote_workers():
             store_op = store_op.zip_with_source_actor() \
@@ -234,7 +240,7 @@ class MuZeroTrainer(Trainable):
                 import gym  # soft dependency
                 self.env_creator = lambda env_config: gym.make(env)
         else:
-            self.env_creator = lambda env_config: None
+            raise Exception('self._env_id should not be None.')
 
         if config['framework'] == 'tf' or config['framework'] == 'tfe':
             from muzero.muzero_tf_policy import MuZeroTFPolicy
@@ -293,7 +299,7 @@ class MuZeroTrainer(Trainable):
     def default_resource_request(
             cls, config: dict) -> Resources:
         cf = dict(cls._default_config(config.get('action_type', None)), **config)
-        num_workers = cf["num_workers"] + cf["evaluation_num_workers"]
+        num_workers = cf["num_workers"]
         # TODO(ekl): add custom resources here once tune supports them
         return Resources(
             cpu=cf["num_cpus_for_driver"],

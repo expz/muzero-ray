@@ -1,11 +1,36 @@
-from ray.rllib.agents.trainer import with_common_config
-
-
 max_moves = 512
 
-# Common config: https://docs.ray.io/en/latest/rllib-training.html#common-parameters
+DEFAULT_CONFIG = {
+    # Number of CPUs to allocate for the trainer. Note: this only takes effect
+    # when running in Tune. Otherwise, the trainer runs in the main program.
+    'num_gpus': 1,
+    'num_cpus_for_driver': 1,
+    'num_cpus_per_worker': 1,
+    'num_gpus_per_worker': 0,
+    # Heap memory for the trainer process.
+    'memory': 0,
+    # Object store memory for the trainer process.
+    'object_store_memory': 0,
+    'memory_per_worker': 0,
+    'object_store_memory_per_worker': 0,
+    'custom_resources_per_worker': {},
+    'multiagent': {
+        'replay_mode': 'independent',
+    },
+    'timesteps_per_iteration': 1024,
+    'min_iter_time_s': 0,
+    'metrics_smoothing_episodes': 20,
+    'collect_metrics_timeout': 180,
+}
 
-BOARD_DEFAULT_CONFIG = with_common_config({
+
+def config(conf: dict) -> dict:
+    new_conf = {**DEFAULT_CONFIG}
+    new_conf.update(conf)
+    return new_conf
+
+
+BOARD_DEFAULT_CONFIG = config({
     'framework': 'tfe',
     'conv_filters': {
         'representation': [
@@ -29,6 +54,7 @@ BOARD_DEFAULT_CONFIG = with_common_config({
         ]
     },
     'action_type': 'board',
+    'envs_per_worker': 2,
     'preprocessor_pref': 'none',  # Prevent deepmind preprocessor from running
     'board_shape': (9, 9),
     'value_type': 'scalar',
@@ -70,7 +96,7 @@ BOARD_DEFAULT_CONFIG = with_common_config({
     },
 })
 
-ATARI_DEFAULT_CONFIG = with_common_config({
+ATARI_DEFAULT_CONFIG = config({
     'framework': 'tfe',
     'conv_filters': {
         'representation': [
@@ -79,7 +105,7 @@ ATARI_DEFAULT_CONFIG = with_common_config({
             (1, 'conv', 256, (3, 3), (2, 2)),
             (3, 'res', 256, (3, 3), (1, 1)),
             (1, 'avg_pool', None, (3, 3), (2, 2)),
-            (2, 'res', 256, (3, 3), (1, 1)),
+            (3, 'res', 256, (3, 3), (1, 1)),
             (1, 'avg_pool', None, (3, 3), (2, 2)),
             (16, 'res', 256, (3, 3), (1, 1)),
         ],
@@ -87,18 +113,22 @@ ATARI_DEFAULT_CONFIG = with_common_config({
             (1, 'conv', 256, (3, 3), (1, 1)),
             (16, 'res', 256, (3, 3), (1, 1)),
         ],
-        'prediction': [
-            (1, 'conv', 128, (1, 1), (1, 1)),
-        ],
-        'value_head': [
+        'reward': [
             (1, 'conv', 1, (1, 1), (1, 1)),
             (1, 'fc', 256, None, None),
         ],
-        'policy_head': [
-            (1, 'conv', 64, (1, 1), (1, 1)),
+        'prediction': [
+        ],
+        'value': [
+            (1, 'conv', 1, (1, 1), (1, 1)),
+            (1, 'fc', 256, None, None),
+        ],
+        'policy': [
+            (1, 'conv', 2, (1, 1), (1, 1)),
         ],
     },
     'action_type': 'atari',
+    'envs_per_worker': 4,
     'preprocessor_pref': 'none',  # Prevent deepmind preprocessor from running
     'value_type': 'categorical',
     'value_max': 300,
@@ -109,15 +139,17 @@ ATARI_DEFAULT_CONFIG = with_common_config({
     'n_channels': 4,  # Number of channels per frame
     'loss_steps': 5,
     'n_step': 10,
+    # The paper used 0.05 with batch size 1024
     'lr': 0.001,
     'lr_schedule': None,
     'momentum': 0.9,
-    'l2_reg': 1e-4,
+    'l2_reg': 1e-5,
     'gamma': 0.997,
     # The epsilon used in the formula for the invertible transform of model outputs.
     'scaling_epsilon': 0.001,
     'grad_clip': 40.0,
     'value_loss_weight': 0.25,  # See Reanalyze appendix
+    # The paper uses batch size of 1024
     'train_batch_size': 32,
     # The max number of observations the replay buffer can store.
     'buffer_size': 65536,
@@ -142,7 +174,8 @@ ATARI_DEFAULT_CONFIG = with_common_config({
         'add_dirichlet_noise': True,
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.25,
-        'num_simulations': 10,
+        # The paper used 50, but showed that it could work with as little as 7
+        'num_simulations': 20,
         'argmax_tree_policy': False,
         'puct_c1': 1.25,
         'puct_c2': 19652,

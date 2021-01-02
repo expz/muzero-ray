@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -50,24 +52,16 @@ class Node:
 
     @property
     def value(self) -> float:
-        #print('visit count:', self.visit_count.shape if hasattr(self.visit_count, 'shape') else 'no shape')
-        #print('viis count type:', type(self.visit_count))
         return self.total_value / self.visit_count if self.visit_count else 0.
 
     def children_ucb_scores(self) -> float:
         pb_c = np.log((self.visit_count + self.mcts.puct_c2 + 1) / self.mcts.puct_c2) + self.mcts.puct_c1
-        #print('pb_c', pb_c)
         pb_c = np.multiply(pb_c, np.divide(np.sqrt(self.visit_count), self.children_n + 1))
-        #print('pb_c 2', pb_c)
         prior_scores = np.multiply(pb_c, self.children_p)
-        #print('prior scores', prior_scores)
         
-        #print('children_rewards', self.children_r)
-        #print('children q', self.children_q)
         value_scores = (self.children_n > 0).astype(np.float32) * (
             self.children_r + self.mcts.gamma * self.mcts.normalize_q(self.children_q)
         )
-        #print('value scores', value_scores)
         
         return prior_scores + value_scores
 
@@ -166,8 +160,6 @@ class MCTS:
         self.add_dirichlet_noise = mcts_config["add_dirichlet_noise"]
         self.dir_epsilon = mcts_config["dirichlet_epsilon"] if 'dirichlet_epsilon' in mcts_config else 0
         self.dir_alpha = mcts_config["dirichlet_alpha"] if 'dirichlet_alpha' in mcts_config else None
-
-        #self.bomb_fuse = 10
     
     @property
     def temperature(self):
@@ -217,57 +209,41 @@ class MCTS:
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation(batch_reward, self.model.reward_basis)
                 batch_reward = self.model.untransform(batch_reward)
-                #print('batch_state:', batch_state.shape)
-                #print('batch_reward:', batch_reward.shape)
-                #print('batchreward[0]:', batch_reward[0].shape if hasattr(batch_reward[0], 'shape') else type(batch_reward[0]))
                 for j, state in enumerate(tf.unstack(batch_state)):
                     leaves[j].state = state
                     leaves[j].reward = batch_reward[j]
-            batch_value, children_logits = self.model.prediction(batch_state)
+            batch_value, children_priors = self.model.prediction(batch_state)
             if self.model.is_value_categorical:
                 batch_value = self.model.expectation(batch_value, self.model.value_basis)
-            batch_value = np.array(self.model.untransform(batch_value))
-            children_priors = tf.nn.softmax(children_logits, axis=-1)
-            children_priors = np.array(children_priors)
-            #print('batch_value:', batch_value.shape)
-            #print('children priors:', children_priors.shape)
+            batch_value = self.model.untransform(batch_value).numpy()
+            children_priors = children_priors.numpy()
             if self.add_dirichlet_noise:
                 noise = np.random.dirichlet([self.dir_alpha] * self.model.action_space_size)
-                #print("noise:", noise.shape)
                 children_priors = (1 - self.dir_epsilon) * children_priors + self.dir_epsilon * noise
-                #print('new children priors:', children_priors.shape, 'vals:', children_priors)
             batch_value = [value.squeeze() for value in np.split(batch_value, batch_value.shape[0])]
             children_priors = [priors.squeeze() for priors in np.split(children_priors, children_priors.shape[0])]
             for leaf, priors, value in zip(leaves, children_priors, batch_value):
                 leaf.expand(priors)
-                #print('value for backup:', value.shape)
                 leaf.backup(value)
 
         values = np.array([node.value for node in nodes])
+        # From Appendix D
         tree_policies = np.array([
-            #np.power(node.children_n / node.visit_count, self.temperature)
             np.power(node.children_n, 1 / self.temperature)
             for node in nodes
         ])
-        #tree_policies = tf.nn.softmax(tree_policies)
         tree_policies = np.divide(tree_policies, np.sum(tree_policies, axis=1, keepdims=True))
-        #print(tree_policies)
-        #self.bomb_fuse -= 1
-        #if not self.bomb_fuse:
-        #    raise Exception('boom! this thread exploded')
         if self.exploit:
             # if exploit then choose action that has the maximum
             # tree policy probability
             actions = np.argmax(tree_policies, axis=1)
         else:
-            # otherwise sample an action according to tree policy probabilities
-            #categorical = tfp.distributions.Categorical(logits=tree_policies)
             # Sample from the categorical distributions of tree_policies
             b, _ = tree_policies.shape
             cum_prob = np.cumsum(tree_policies, axis=-1)
             r = np.random.uniform(size=(b, 1))
+            # Returns the indices of the first occurences of True
             actions = np.argmax(cum_prob > r, axis=-1)
-        #print('mcts compute actions:', values.shape, tree_policies.shape, actions)
         return values, tree_policies, actions
 
 
@@ -298,8 +274,6 @@ class TFMCTS:
         self.dir_alpha = mcts_config["dirichlet_alpha"] if 'dirichlet_alpha' in mcts_config else None
         if self.add_dirichlet_noise:
             self.dirichlet = tfp.distributions.Dirichlet([self.dir_alpha] * self.model.action_space_size)
-
-        #self.bomb_fuse = 10
     
     @property
     def temperature(self):
@@ -351,49 +325,33 @@ class TFMCTS:
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation(batch_reward, self.model.reward_basis)
                 batch_reward = self.model.untransform(batch_reward)
-                #print('batch_state:', batch_state.shape)
-                #print('batch_reward:', batch_reward.shape)
-                #print('batchreward[0]:', batch_reward[0].shape if hasattr(batch_reward[0], 'shape') else type(batch_reward[0]))
                 for j, state in enumerate(tf.unstack(batch_state)):
                     leaves[j].state = state
                     leaves[j].reward = batch_reward[j]
-            batch_value, children_priors_logits = self.model.prediction(batch_state)
+            batch_value, children_priors = self.model.prediction(batch_state)
             if self.model.is_value_categorical:
                 batch_value = self.model.expectation(batch_value, self.model.value_basis)
             batch_value = self.model.untransform(batch_value)
-            #print('batch_value:', batch_value.shape)
-            children_priors = tf.nn.softmax(children_priors_logits)
-            #print('children priors:', children_priors.shape)
             if self.add_dirichlet_noise:
                 noise = self.dirichlet.sample(1)
-                #print("noise:", noise.shape)
                 children_priors = (1 - self.dir_epsilon) * children_priors + self.dir_epsilon * noise
-                #print('new children priors:', children_priors.shape, 'vals:', children_priors)
             for leaf, priors, value in zip(leaves, tf.unstack(children_priors), tf.unstack(batch_value)):
                 leaf.expand(priors)
-                #print('value for backup:', value.shape)
                 leaf.backup(value)
 
         values = tf.convert_to_tensor([node.value for node in nodes])
+        # From Appendix D
         tree_policies = tf.convert_to_tensor([
-            #np.power(node.children_n / node.visit_count, self.temperature)
             np.power(node.children_n, 1 / self.temperature)
             for node in nodes
         ])
-        #tree_policies = tf.nn.softmax(tree_policies)
         tree_policies = tf.math.divide(tree_policies, tf.math.reduce_sum(tree_policies, axis=1, keepdims=True))
-        #print(tree_policies)
-        #self.bomb_fuse -= 1
-        #if not self.bomb_fuse:
-        #    raise Exception('boom! this thread exploded')
         if self.exploit:
             # if exploit then choose action that has the maximum
             # tree policy probability
             actions = tf.math.argmax(tree_policies, axis=1)
         else:
             # otherwise sample an action according to tree policy probabilities
-            #categorical = tfp.distributions.Categorical(logits=tree_policies)
             categorical = tfp.distributions.Categorical(probs=tree_policies)
             actions = categorical.sample(len(values))
-        #print('mcts compute actions:', values.shape, tree_policies.shape, actions)
         return values, tree_policies, actions

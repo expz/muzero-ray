@@ -7,17 +7,14 @@ import tensorflow as tf
 from typing import List
 
 import ray
-from ray.rllib.policy.sample_batch import SampleBatch, MultiAgentBatch, \
-    DEFAULT_POLICY_ID
-from ray.rllib.utils.types import SampleBatchType
-from ray.rllib.utils.timer import TimerStat
 from ray.util.iter import ParallelIteratorWorker
+from ray.util.timer import _Timer as TimerStat
+
+from muzero.sample_batch import SampleBatch, DEFAULT_POLICY_ID
+
 
 PRIO_WEIGHTS = 'weights'
-
-
-# Constant that represents all policies in lockstep replay mode.
-_ALL_POLICIES = "__all__"
+PRIORITIES = 'priorities'
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +310,7 @@ class ReplayBuffer(tf.Module):
     else:
       self._fields = None
 
-  def add(self, item: SampleBatchType, weight: float):
+  def add(self, item: SampleBatch, weight: float):
     pass
 
   def sample(self, num_items: int):
@@ -347,18 +344,21 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self.channels_per_frame = tensor_spec[i].shape[-1]
     self.frames_per_obs = frames_per_obs
 
-  def add(self, item: SampleBatchType, weight: float):
+  def add(self, item: SampleBatch, p: float):
+    """
+    The item is added with priority `p**self.alpha`.
+    """
     assert len(item[SampleBatch.EPS_ID]) == 1
     assert len(item['t']) == 1
     #print('sample keys:', sorted([(field, item[field].shape) for field in item.data]))
-    episode, step = item[SampleBatch.EPS_ID][0], item['t'][0]
-    if weight == -1:
-      weight = self._tree.max if self._tree.max else 1
+    episode, step = item[SampleBatch.EPS_ID][0], item["t"][0]
+    if p == -1:
+      p = self._tree.max if self._tree.max else 1
     else:
-      assert weight >= 0
-    prob = np.pow(weight, self.alpha) if self.alpha != 1 else weight
+      assert p >= 0
+    priority = np.pow(p, self.alpha) if self.alpha != 1 else p
     id_ = self._tree.next_id
-    overwritten = self._tree.add(episode, step, prob)
+    overwritten = self._tree.add(episode, step, priority)
     if overwritten is not None:
       eps, st = overwritten
       del self._episode_steps[(eps, st)]
@@ -432,7 +432,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     #print('batch', [(field, batch[i].shape) for i, field in enumerate(self._fields)])
     self._steps.add_batch(batch, rows)
 
-  def sample(self, num_items: int, trajectory_len: int = None) -> SampleBatchType:
+  def sample(self, num_items: int, trajectory_len: int = None) -> SampleBatch:
     if trajectory_len is None:
       trajectory_len = self.frames_per_obs
     episode_steps, tree_indices = self._tree.sample_batch(num_items)
@@ -449,11 +449,13 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     #  print('tree size', {self._tree.size})
     #  print('tree min', {self._tree.min})
     #  """)
-    max_weight = (self._tree.min * self._tree.size)**(-self.beta)
+    max_weight = ((self._tree.min / self._tree.total) * self._tree.size)**(-self.beta)
     weights = [
       ((self._tree.get_by_index(idx) / self._tree.total) * self._tree.size)**(-self.beta) / max_weight
       for idx in tree_indices
     ]
+    #idx = tree_indices[0]
+    #print('priority', self._tree.get_by_index(idx), 'total', self._tree.total, 'size', self._tree.size, 'beta', self.beta, 'max weight', max_weight, 'min', self._tree.min, 'weight', weights[0])
     data = { field: [] for field in self._fields }
     for episode, step in episode_steps:
       indices = [
@@ -530,6 +532,7 @@ class LocalReplayBuffer(ParallelIteratorWorker):
         self.replay_starts = learning_starts // num_shards
         self.buffer_size = buffer_size // num_shards
         self.replay_batch_size = replay_batch_size
+        self.prioritized_replay_alpha = prioritized_replay_alpha
         self.prioritized_replay_beta = prioritized_replay_beta
         self.prioritized_replay_eps = prioritized_replay_eps
         self.replay_mode = replay_mode
@@ -585,52 +588,36 @@ class LocalReplayBuffer(ParallelIteratorWorker):
     def get_default_buffer(self):
         return self.replay_buffers[DEFAULT_POLICY_ID]
 
-    def add_batch(self, batch):
+    def add_batch(self, batch: SampleBatch):
         # Make a copy so the replay buffer doesn't pin plasma memory.
-        batch = batch.copy()
-        # Handle everything as if multiagent
-        if isinstance(batch, SampleBatch):
-            batch = MultiAgentBatch({DEFAULT_POLICY_ID: batch}, batch.count)
+        b = batch.copy()
+        del batch
         with self.add_batch_timer:
-            if self.replay_mode == "lockstep":
-                # Note that prioritization is not supported in this mode.
-                for s in batch.timeslices(self.replay_sequence_length):
-                    self.replay_buffers[_ALL_POLICIES].add(s, weight=None)
-            else:
-                for policy_id, b in batch.policy_batches.items():
-                    for s in b.timeslices(self.replay_sequence_length):
-                        if PRIO_WEIGHTS in s:
-                            weight = np.mean(s[PRIO_WEIGHTS])
-                        else:
-                            weight = None
-                        self.replay_buffers[policy_id].add(s, weight=weight)
-        self.num_added += batch.count
+            for s in b.timeslices(1):
+                if PRIORITIES in s:
+                    p = s[PRIORITIES][0]
+                else:
+                    p = -1  # -1 means unknown
+                self.replay_buffers[DEFAULT_POLICY_ID].add(s, p=p)
+        self.num_added += b.count
 
     def replay(self):
         if self._fake_batch:
             fake_batch = SampleBatch(self._fake_batch)
-            return MultiAgentBatch({
-                DEFAULT_POLICY_ID: fake_batch
-            }, fake_batch.count)
+            return fake_batch
 
         # TODO: This might break training intensity
         if self.num_added < max(self.replay_starts, self.replay_batch_size):
             return None
 
         with self.replay_timer:
-            if self.replay_mode == "lockstep":
-                return self.replay_buffers[_ALL_POLICIES].sample(self.replay_batch_size)
-            else:
-                samples = {}
-                for policy_id, replay_buffer in self.replay_buffers.items():
-                    samples[policy_id] = replay_buffer.sample(self.replay_batch_size)
-                return MultiAgentBatch(samples, self.replay_batch_size)
+            return self.replay_buffers[DEFAULT_POLICY_ID].sample(self.replay_batch_size)
 
     def update_priorities(self, prio_dict):
         with self.update_priorities_timer:
-            for policy_id, (batch_indexes, td_errors) in prio_dict.items():
+            for policy_id, (batch_indexes, ps) in prio_dict.items():
                 new_priorities = (
-                    np.abs(td_errors) + self.prioritized_replay_eps)
+                    np.abs(ps) + self.prioritized_replay_eps)
                 self.replay_buffers[policy_id].update_priorities(
                     batch_indexes, new_priorities)
 

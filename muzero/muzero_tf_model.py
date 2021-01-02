@@ -1,23 +1,19 @@
+from __future__ import annotations
+
+from typing import Any
+
 import gym
 import numpy as np
-from ray.rllib.agents.trainer import with_common_config
-from ray.rllib.models.modelv2 import ModelV2
-from ray.rllib.models.tf.recurrent_net import RecurrentNetwork
-import ray.rllib.models.tf.tf_action_dist as rllib_tf_dist
-from ray.rllib.models.tf.tf_modelv2 import TFModelV2
-from ray.rllib.policy import Policy, TFPolicy
-from ray.rllib.policy.tf_policy_template import build_tf_policy
-from ray.rllib.policy.sample_batch import SampleBatch
-from ray.rllib.utils.annotations import override
-from ray.rllib.utils.tf_ops import make_tf_callable
-from ray.rllib.utils.types import AgentID, TensorType, TrainerConfigDict
 import tensorflow as tf
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from muzero.mcts import MCTS
+from muzero.sample_batch import SampleBatch
+
+TensorType = Any
 
 
-class MuZeroTFModelV2(TFModelV2):
+class MuZeroTFModelV2:
     BOARD = 0
     ATARI = 1
     
@@ -25,14 +21,15 @@ class MuZeroTFModelV2(TFModelV2):
                  obs_space: gym.spaces.Space,
                  action_space: gym.spaces.Space,
                  model_config: Dict[str, Any]):
-        super(MuZeroTFModelV2, self).__init__(
-            obs_space,
-            action_space,
-            action_space.n,
-            model_config,
-            'MuZeroTFModelV2')
         self.config = model_config
-        
+
+        from tensorflow.compat.v1 import ConfigProto
+        from tensorflow.compat.v1 import InteractiveSession
+
+        config = ConfigProto()
+        config.gpu_options.allow_growth = True
+        session = InteractiveSession(config=config)
+
         self.input_shape = obs_space.shape
         obs_input = tf.keras.Input(self.input_shape)
         state_output = self._build_model(obs_input, model_config['conv_filters']['representation'])
@@ -55,13 +52,13 @@ class MuZeroTFModelV2(TFModelV2):
         action_input = tf.keras.Input(self.action_shape)
         dynamics_input = tf.keras.layers.Concatenate(axis=-1)([state_input, action_input])
         next_state_output = self._build_model(dynamics_input, model_config['conv_filters']['dynamics'])
-        reward_output = self._scalar_head(next_state_output, model_config, 'reward')
+        reward_output = self._scalar_head(next_state_output, model_config['conv_filters']['reward'], model_config['reward_type'], model_config['reward_max'])
         self.dynamics_net = tf.keras.Model([state_input, action_input], [next_state_output, reward_output])
         
         prediction_input = tf.keras.Input(self.state_shape)
         prediction_output = self._build_model(prediction_input, model_config['conv_filters']['prediction'])
-        value_output = self._scalar_head(prediction_output, model_config, 'value')
-        policy_output = self._policy_head(prediction_output, model_config)
+        value_output = self._scalar_head(prediction_output, model_config['conv_filters']['value'], model_config['value_type'], model_config['value_max'])
+        policy_output = self._policy_head(prediction_output, model_config['conv_filters']['policy'])
         self.prediction_net = tf.keras.Model(prediction_input, [value_output, policy_output])
         
         if model_config['value_type'] == 'categorical':
@@ -82,47 +79,46 @@ class MuZeroTFModelV2(TFModelV2):
 
         self._value_out = None
         
-        self.register_variables(
+        self.var_list = (
             self.representation_net.variables
             + self.dynamics_net.variables
-            + self.prediction_net.variables)
-        
-        self.mcts = MCTS(self, model_config)
-    
-    def trainable_variables(self) -> List[tf.Variable]:
-        return (
+            + self.prediction_net.variables
+        )
+        self.train_var_list = (
             self.representation_net.trainable_variables
             + self.dynamics_net.trainable_variables
             + self.prediction_net.trainable_variables
         )
+        
+        self.mcts = MCTS(self, model_config)
+
+    def variables(self) -> List[tf.Variable]:
+        return self.var_list
+
+    def trainable_variables(self) -> List[tf.Variable]:
+        return self.train_var_list
 
     def _policy_head(self, last_layer: tf.keras.layers.Layer, config: Dict[str, Any]) -> tf.keras.layers.Layer:
         output = last_layer
-        output = tf.keras.layers.Conv2D(256, (3, 3), (1, 1))(output)
-        output = tf.keras.layers.BatchNormalization()(output)
-        output = tf.keras.layers.ReLU()(output)
-        
+        output = self._build_model(output, config)
+       
         num_nodes = np.prod(tuple(output.shape[1:]))
         output = tf.keras.layers.Reshape((num_nodes,))(output)
-        output = tf.keras.layers.Dense(self.num_outputs)(output)
-        # output = tf.keras.layers.Softmax()(output)
+        output = tf.keras.layers.Dense(self.action_space_size)(output)
+        output = tf.keras.layers.Softmax()(output)
         return output
     
-    def _scalar_head(self, last_layer: tf.keras.layers.Layer, config: Dict[str, Any], name: str = 'value') -> tf.keras.layers.Layer:
+    def _scalar_head(self, last_layer: tf.keras.layers.Layer, config: Dict[str, Any], head_type: str = 'scalar', head_max: int = 300) -> tf.keras.layers.Layer:
         output = last_layer
-        output = tf.keras.layers.Conv2D(1, (1, 1), (1, 1))(output)
-        output = tf.keras.layers.BatchNormalization()(output)
-        output = tf.keras.layers.ReLU()(output)
-        
-        num_nodes = np.prod(tuple(output.shape[1:]))
-        output = tf.keras.layers.Reshape((num_nodes,))(output)
-        output = tf.keras.layers.Dense(256, activation='relu')(output)
-        if config[f'{name}_type'] == 'categorical':
-            output = tf.keras.layers.Dense(2 * config[f'{name}_max'] + 1)(output)
-        elif config[f'{name}_type'] == 'scalar':
+        output = self._build_model(output, config)
+       
+        if head_type == 'categorical':
+            output = tf.keras.layers.Dense(2 * head_max + 1)(output)
+            output = tf.keras.layers.Softmax()(output)
+        elif head_type == 'scalar':
             output = tf.keras.layers.Dense(1, activation='tanh')(output)
         else:
-            raise NotImplemented(f'{name}_type "{config[name + "_type"]}" unknown')
+            raise NotImplemented(f'scalar head type "{head_type}" unknown')
         return output
         
     def _build_model(self, input_layer: tf.keras.layers.Layer, config: Dict[str, Any]) -> tf.keras.layers.Layer:
@@ -149,6 +145,12 @@ class MuZeroTFModelV2(TFModelV2):
             elif layer_type == 'max_pool':
                 for _ in range(layer_count):
                     last_layer = tf.keras.layers.MaxPool2D(kernel_size, stride, padding='same')(last_layer)
+            elif layer_type == 'fc':
+                if len(last_layer.shape) > 2:
+                    last_layer = tf.keras.layers.Reshape((-1,))(last_layer)
+                for _ in range(layer_count):
+                    last_layer = tf.keras.layers.Dense(num_filters)(last_layer)
+                    last_layer = tf.keras.layers.ReLU()(last_layer)
         return last_layer
     
     
@@ -157,7 +159,7 @@ class MuZeroTFModelV2(TFModelV2):
         channel_shape = self.state_shape[:-1].as_list()
         actions = tf.reshape(actions, tf.concat([tf.shape(actions), tf.convert_to_tensor([1] * len(channel_shape))], 0))
         tile = tf.tile(actions, tf.constant([1] + channel_shape))
-        one_hot = tf.one_hot(tile, self.num_outputs)
+        one_hot = tf.one_hot(tile, self.action_space_size)
         return one_hot
 
     def transform(self, t: TensorType) -> TensorType:
@@ -270,10 +272,13 @@ class MuZeroTFModelV2(TFModelV2):
         right = tf.boolean_mask(right, in_bounds)
 
         return tf.scatter_nd(indices_l, left, shape) + tf.scatter_nd(indices_u, right, shape)
-    
-    def forward(self, input_dict: Dict[str, Any], state: List[Any], seq_lens: Any) -> Tuple[TensorType, List[Any]]:
+
+    def __call__(self, input_dict: Dict[str, Any], is_training: bool = True) -> Tuple[TensorType, List[Any]]:
+        return self.forward(input_dict, is_training) 
+
+    def forward(self, input_dict: Dict[str, Any], is_training: bool = True) -> Tuple[TensorType, List[Any]]:
         """
-        WARNING: This outputs policy as probabilities if not training and as logits if training.
+        WARNING: This outputs policy as probabilities.
 
         This is called by the learner thread.
         
@@ -290,25 +295,22 @@ class MuZeroTFModelV2(TFModelV2):
                 [BATCH, state_size_i].
         """
         # Observations need to have self.input_steps steps for each batch.
-        is_training = input_dict['is_training'] if 'is_training' in input_dict else False
         # Convert boolean tensor to Python bool
         if isinstance(is_training, tf.Tensor):
             is_training = tf.keras.backend.eval(is_training)
 
-        # Hack because it's not getting set to True.
-        is_training = True
-        
         if is_training:
             # For Atari, obs should be of size (batch_size, screen_x, screen_y, self.input_steps*4).
             hidden_state = self.representation(input_dict[SampleBatch.CUR_OBS])
             value, policy = self.prediction(hidden_state)
+            value = self.expectation(value, self.value_basis)
         else:
             value, policy, actions = self.mcts.compute_action(input_dict[SampleBatch.CUR_OBS])
-        return policy, state
+        return policy, value
 
     def forward_with_value(self, obs: TensorType, is_training: bool = False) -> Tuple[TensorType, TensorType]:
         """
-        WARNING: This outputs policy as probabilities if not training and as logits if training.
+        WARNING: This outputs policy as probabilities.
 
         This is called by the rollout workers.
         """
@@ -320,6 +322,7 @@ class MuZeroTFModelV2(TFModelV2):
             # For Atari, obs should be of size (batch_size, screen_x, screen_y, self.input_steps*4).
             hidden_state = self.representation(obs)
             value, policy = self.prediction(hidden_state)
+            value = self.expectation(value, self.value_basis)
         else:
             value, policy, actions = self.mcts.compute_action(obs)
         return value, policy

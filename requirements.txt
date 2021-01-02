@@ -1,13 +1,14 @@
 #cloudpickle==1.4.1  # Fixes bug with type hints for Python 3.6
 coloredlogs
 GPUtil==1.4.0
-gym
+gym[atari]
+lz4
 numpy
 pandas
 pillow
-ray[rllib]==0.8.7
+ray[tune]==0.8.7
 sortedcontainers
 tensorboardX
-tensorflow-gpu
-tensorflow-probability
+tensorflow-gpu==2.4.0
+tensorflow-probability==0.12.0
 xvfbwrapper
