@@ -431,6 +431,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     batch = tuple(data[field] for field in self._fields)
     #print('batch', [(field, batch[i].shape) for i, field in enumerate(self._fields)])
     self._steps.add_batch(batch, rows)
+    return priority
 
   def sample(self, num_items: int, trajectory_len: int = None) -> SampleBatch:
     if trajectory_len is None:
@@ -570,6 +571,9 @@ class LocalReplayBuffer(ParallelIteratorWorker):
         self.replay_timer = TimerStat()
         self.update_priorities_timer = TimerStat()
         self.num_added = 0
+        self.num_updated = 0
+        self.priority_total = 0
+        self.updated_priority_total = 0
 
         # Make externally accessible for testing.
         global _local_replay_buffer
@@ -598,8 +602,8 @@ class LocalReplayBuffer(ParallelIteratorWorker):
                     p = s[PRIORITIES][0]
                 else:
                     p = -1  # -1 means unknown
-                self.replay_buffers[DEFAULT_POLICY_ID].add(s, p=p)
-        self.num_added += b.count
+                self.priority_total += self.replay_buffers[DEFAULT_POLICY_ID].add(s, p=p)
+                self.num_added += 1
 
     def replay(self):
         if self._fake_batch:
@@ -616,10 +620,11 @@ class LocalReplayBuffer(ParallelIteratorWorker):
     def update_priorities(self, prio_dict):
         with self.update_priorities_timer:
             for policy_id, (batch_indexes, ps) in prio_dict.items():
-                new_priorities = (
-                    np.abs(ps) + self.prioritized_replay_eps)
+                new_priorities = np.abs(ps) + self.prioritized_replay_eps
                 self.replay_buffers[policy_id].update_priorities(
                     batch_indexes, new_priorities)
+                self.num_updated += new_priorities.shape[0]
+                self.updated_priority_total += new_priorities.sum()
 
     def stats(self, debug=False):
         stat = {
@@ -627,11 +632,19 @@ class LocalReplayBuffer(ParallelIteratorWorker):
             "replay_time_ms": round(1000 * self.replay_timer.mean, 3),
             "update_priorities_time_ms": round(
                 1000 * self.update_priorities_timer.mean, 3),
+            "average_priority": self.priority_total / self.num_added,
+            "update_count": self.num_updated,
+            "average_updated_priority": self.updated_priority_total / self.num_updated,
         }
         for policy_id, replay_buffer in self.replay_buffers.items():
             stat.update({
                 "policy_{}".format(policy_id): replay_buffer.stats(debug=debug)
             })
+        # Reset count and priority stats after every call
+        self.num_added = 0
+        self.num_updated = 0
+        self.priority_total = 0
+        self.updated_priority_total = 0
         return stat
 
 ReplayActor = ray.remote(num_cpus=0)(LocalReplayBuffer)

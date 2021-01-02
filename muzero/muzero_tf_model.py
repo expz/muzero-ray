@@ -77,8 +77,6 @@ class MuZeroTFModelV2:
         self.value_max = model_config['value_max']
         self.reward_max = model_config['reward_max']
 
-        self._value_out = None
-        
         self.var_list = (
             self.representation_net.variables
             + self.dynamics_net.variables
@@ -221,9 +219,6 @@ class MuZeroTFModelV2:
                 )) - 1
             )
 
-    def value_function(self) -> TensorType:
-        return self._value_out
-
     @staticmethod
     def expectation(categorical: TensorType, basis: TensorType) -> TensorType:
         return tf.tensordot(categorical, basis, axes=[[-1], [0]])
@@ -338,8 +333,8 @@ class MuZeroTFModelV2:
     
     def prediction(self, hidden_state: TensorType) -> Tuple[TensorType, TensorType]:
         """hidden_state should be of shape (batch_size,) + self.state_shape"""
-        self._value_out, policy = self.prediction_net(hidden_state)
-        return self._value_out, policy
+        value, policy = self.prediction_net(hidden_state)
+        return value, policy
     
     def dynamics(self, hidden_state: TensorType, action_batch: TensorType) -> Tuple[TensorType, TensorType]:
         """action should be of shape (batch_size) + self.state_shape[:-1]"""

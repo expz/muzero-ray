@@ -258,8 +258,8 @@ class MuZeroTFPolicy(TFPolicy):
     def value_target(self,
                      rewards,
                      vf_preds):
-        rewards = self.model.untransform(rewards)
-        vf_preds = self.model.untransform(vf_preds)
+        #rewards = self.model.untransform(rewards)
+        #vf_preds = self.model.untransform(vf_preds)
         vf_preds = np.reshape(vf_preds, (-1,))
 
         # This calculates
@@ -287,7 +287,7 @@ class MuZeroTFPolicy(TFPolicy):
             value_target += t[k:N + k] * gamma_k
         value_target = value_target.astype(np.float32)
 
-        return self.model.transform(value_target)
+        return value_target  # self.model.transform(value_target)
       
     def postprocess_trajectory(
         self,
@@ -325,7 +325,7 @@ class MuZeroTFPolicy(TFPolicy):
 
         sample_batch['rollout_values'] = rollout(value_target)
 
-        sample_batch['rollout_rewards'] = rollout(self.model.untransform(rewards))
+        sample_batch['rollout_rewards'] = rollout(rewards)  # rollout(self.model.untransform(rewards))
 
         return sample_batch
 

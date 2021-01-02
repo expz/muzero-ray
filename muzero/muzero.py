@@ -143,6 +143,7 @@ ATARI_DEFAULT_CONFIG = config({
     'lr': 0.001,
     'lr_schedule': None,
     'momentum': 0.9,
+    # The paper used 1e-4 with batch size 1024
     'l2_reg': 1e-5,
     'gamma': 0.997,
     # The epsilon used in the formula for the invertible transform of model outputs.
@@ -175,7 +176,7 @@ ATARI_DEFAULT_CONFIG = config({
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.25,
         # The paper used 50, but showed that it could work with as little as 7
-        'num_simulations': 20,
+        'num_simulations': 15,
         'argmax_tree_policy': False,
         'puct_c1': 1.25,
         'puct_c2': 19652,

@@ -21,6 +21,20 @@ class CalculatePriorities:
         self.gamma = gamma
         self.episodes: Dict[int, queue.Queue] = {}
 
+    def get_next_batch(self, q: queue.Queue) -> SampleBatch:
+        search_value = 0
+        observed_return = 0
+        for m in range(self.n):
+            b, k = q.get_nowait()
+            search_value += self.gamma**m * b[SampleBatch.VF_PREDS][k]
+            observed_return += self.gamma**m * b[SampleBatch.REWARDS][k]
+            q.put((b, k))
+        #print('search_value', search_value, 'observed_return', observed_return, 'gamma', self.gamma)
+        b, k = q.get_nowait()
+        b_frame = b.slice(k, k + 1)
+        b_frame[PRIORITIES] = [abs(search_value - observed_return)]
+        return b_frame
+
     def __call__(self, batch: SampleBatch):
         """
         Assumes that batch is ordered by step number, although
@@ -29,25 +43,20 @@ class CalculatePriorities:
         next_batches = []
         for i, eps_id in enumerate(batch[SampleBatch.EPS_ID]):
             if eps_id not in self.episodes:
+                assert not batch[SampleBatch.DONES][i]
                 self.episodes[eps_id] = queue.Queue(maxsize=10)
             q = self.episodes[eps_id]
             q.put_nowait((batch, i))
             if batch[SampleBatch.DONES][i]:
                 # Force calculation of search value with less than n steps
+                s = q.qsize()
+                for _ in range(s):
+                    while q.qsize() < self.n:
+                        q.put((batch, i), timeout=0.1)
+                    next_batches.append(self.get_next_batch(q))
                 del self.episodes[eps_id]
             elif q.qsize() == self.n:
-                search_value = 0
-                observed_return = 0
-                for m in range(self.n):
-                    b, k = q.get_nowait()
-                    search_value += self.gamma**m * b[SampleBatch.VF_PREDS][k]
-                    observed_return += self.gamma**m * b[SampleBatch.REWARDS][k]
-                    q.put((b, k))
-                #print('search_value', search_value, 'observed_return', observed_return, 'gamma', self.gamma)
-                b, k = q.get_nowait()
-                b_frame = b.slice(k, k + 1)
-                b_frame[PRIORITIES] = [abs(search_value - observed_return)]
-                next_batches.append(b_frame)
+                next_batches.append(self.get_next_batch(q))
         if not next_batches:
             return None
         return SampleBatch.concat_samples(next_batches)

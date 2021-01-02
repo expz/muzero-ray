@@ -37,9 +37,9 @@ def main(args):
     config = {
         'env': 'BreakoutNoFrameskip-MuZero-v1',
         'action_type': 'atari',
-        'num_workers': 6,
+        'num_workers': 3,
         'num_gpus': 1,
-        'num_gpus_per_worker': 0.3,
+        'num_gpus_per_worker': 0.5,
         'log_level': args.loglevel.upper(),
         'learning_starts': 256,
         'timesteps_per_iteration': 512,

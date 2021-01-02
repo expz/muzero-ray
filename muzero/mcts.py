@@ -208,14 +208,15 @@ class MCTS:
                 batch_state, batch_reward = self.model.dynamics(batch_state, batch_action)
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation(batch_reward, self.model.reward_basis)
-                batch_reward = self.model.untransform(batch_reward)
+                #batch_reward = self.model.untransform(batch_reward)
                 for j, state in enumerate(tf.unstack(batch_state)):
                     leaves[j].state = state
                     leaves[j].reward = batch_reward[j]
             batch_value, children_priors = self.model.prediction(batch_state)
             if self.model.is_value_categorical:
                 batch_value = self.model.expectation(batch_value, self.model.value_basis)
-            batch_value = self.model.untransform(batch_value).numpy()
+            #batch_value = self.model.untransform(batch_value).numpy()
+            batch_value = batch_value.numpy()
             children_priors = children_priors.numpy()
             if self.add_dirichlet_noise:
                 noise = np.random.dirichlet([self.dir_alpha] * self.model.action_space_size)
@@ -225,6 +226,9 @@ class MCTS:
             for leaf, priors, value in zip(leaves, children_priors, batch_value):
                 leaf.expand(priors)
                 leaf.backup(value)
+            # Not sure if this is necessary
+            for leaf in leaves:
+                del leaf
 
         values = np.array([node.value for node in nodes])
         # From Appendix D
@@ -244,6 +248,9 @@ class MCTS:
             r = np.random.uniform(size=(b, 1))
             # Returns the indices of the first occurences of True
             actions = np.argmax(cum_prob > r, axis=-1)
+        # Not sure if this is necessary
+        for node in nodes:
+            del node
         return values, tree_policies, actions
 
 
@@ -324,14 +331,14 @@ class TFMCTS:
                 batch_state, batch_reward = self.model.dynamics(batch_state, batch_action)
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation(batch_reward, self.model.reward_basis)
-                batch_reward = self.model.untransform(batch_reward)
+                #batch_reward = self.model.untransform(batch_reward)
                 for j, state in enumerate(tf.unstack(batch_state)):
                     leaves[j].state = state
                     leaves[j].reward = batch_reward[j]
             batch_value, children_priors = self.model.prediction(batch_state)
             if self.model.is_value_categorical:
                 batch_value = self.model.expectation(batch_value, self.model.value_basis)
-            batch_value = self.model.untransform(batch_value)
+            #batch_value = self.model.untransform(batch_value)
             if self.add_dirichlet_noise:
                 noise = self.dirichlet.sample(1)
                 children_priors = (1 - self.dir_epsilon) * children_priors + self.dir_epsilon * noise
