@@ -59,6 +59,8 @@ class CalculatePriorities:
                 next_batches.append(self.get_next_batch(q))
         if not next_batches:
             return None
+        metrics = LocalIterator.get_metrics()
+        metrics.info['calculate_priorities_queue_count'] = len(self.episodes)
         return SampleBatch.concat_samples(next_batches)
 
 
@@ -102,7 +104,7 @@ class StoreToReplayBuffer:
             else:
                 actor = random.choice(self.replay_actors)
                 actor.add_batch.remote(batch)
-        return batch
+        #return batch
 
 
 def Replay(*,

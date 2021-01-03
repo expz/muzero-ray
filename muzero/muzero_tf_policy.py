@@ -343,6 +343,9 @@ class MuZeroTFPolicy(TFPolicy):
             _, _, batch = self.compute_actions(samples[SampleBatch.CUR_OBS], is_training=True)
             for key in batch:
                 samples[key] = batch[key]
+            # Not sure if this is necessary
+            if self.loss_obj:
+                del self.loss_obj
             self.loss_obj = MuZeroLoss(self, self.model, self.dist_class, samples)
 
         variables = self.trainable_variables()
