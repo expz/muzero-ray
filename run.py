@@ -39,7 +39,7 @@ def main(args):
         'action_type': 'atari',
         'num_workers': 3,
         'num_gpus': 1,
-        'num_gpus_per_worker': 0.5,
+        'num_gpus_per_worker': 0.3,
         'log_level': args.loglevel.upper(),
         'learning_starts': 256,
         'timesteps_per_iteration': 512,
@@ -63,7 +63,7 @@ def main(args):
         pass
 
     #ray.init(local_mode=True)
-    ray.init(num_cpus=9, num_gpus=3)
+    ray.init(num_cpus=9, num_gpus=2)
     try:
         if args.checkpoint:
             tune.run(

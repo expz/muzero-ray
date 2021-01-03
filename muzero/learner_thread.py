@@ -13,7 +13,7 @@ from muzero.metrics import get_learner_stats
 from muzero.policy import LEARNER_STATS_KEY
 from muzero.sample_batch import DEFAULT_POLICY_ID
 
-LEARNER_QUEUE_MAX_SIZE = 16
+LEARNER_QUEUE_MAX_SIZE = 8
 
 
 import numpy as np
@@ -58,7 +58,7 @@ class LearnerThread(threading.Thread):
         threading.Thread.__init__(self)
         self.learner_queue_size = WindowStat("size", 50)
         self.local_worker = local_worker
-        self.inqueue = queue.Queue(maxsize=LEARNER_QUEUE_MAX_SIZE)
+        self.inqueue = queue.Queue(maxsize=local_worker.config['learner_queue_size'])
         self.outqueue = queue.Queue()
         self.queue_timer = TimerStat()
         self.grad_timer = TimerStat()

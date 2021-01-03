@@ -32,7 +32,7 @@ class RolloutWorker(ParallelIteratorWorker):
             self,
             env_creator,
             policy_cls,
-            policy_config,
+            config,
             num_workers,
             worker_index):
 
@@ -41,7 +41,7 @@ class RolloutWorker(ParallelIteratorWorker):
 
         self._env_creator = env_creator
         self.policy_cls = policy_cls
-        self.policy_config = policy_config
+        self.config = config
         self._num_workers = num_workers
         self._worker_index = worker_index
         self.global_vars: dict = {}
@@ -55,10 +55,10 @@ class RolloutWorker(ParallelIteratorWorker):
 
         ParallelIteratorWorker.__init__(self, rollout, False)
 
-        assert policy_config['envs_per_worker'] > 0
+        assert config['envs_per_worker'] > 0
         self.envs = [
             env_creator({})
-            for _ in range(policy_config['envs_per_worker'])
+            for _ in range(config['envs_per_worker'])
         ]
         self.obs = [env.reset() for env in self.envs]
         self.step_id = [0 for _ in self.envs]
@@ -71,7 +71,7 @@ class RolloutWorker(ParallelIteratorWorker):
         self.policy = policy_cls(
             self.envs[0].observation_space,
             self.envs[0].action_space,
-            policy_config)
+            config)
         print(f'Worker {self._worker_index} initialized.')
 
     def learn_on_batch(self, batch):
@@ -86,7 +86,7 @@ class RolloutWorker(ParallelIteratorWorker):
         return self._m * self._num_workers + self._worker_index
 
     def sample(self):
-        N = self.policy_config['train_batch_size']
+        N = self.config['train_batch_size']
         batch = {}
         batch[SampleBatch.CUR_OBS] = []
         batch[SampleBatch.ACTIONS] = []

@@ -163,7 +163,7 @@ ATARI_DEFAULT_CONFIG = config({
     'rollout_fragment_length': 64,  # Number of steps of experience ot generate before saving batch
     'minibatch_buffer_size': 1,
     'num_sgd_iter': 1,
-    'learner_queue_size': 16,
+    'learner_queue_size': 8,
     'learner_queue_timeout': 60,
     'broadcast_interval': 1,
     'max_sample_requests_in_flight_per_worker': 2,
