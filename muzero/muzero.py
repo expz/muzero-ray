@@ -138,13 +138,16 @@ ATARI_DEFAULT_CONFIG = config({
     'input_steps': 32,  # Number of frames per input
     'n_channels': 4,  # Number of channels per frame
     'loss_steps': 5,
-    'n_step': 10,
+    # The paper used 10, and 5 for the reanalyze version
+    'n_step': 6,
     # The paper used 0.05 with batch size 1024
-    'lr': 0.001,
+    'lr': 0.0004,
     'lr_schedule': None,
+    # The paper used 0.9 with batch size 1024
     'momentum': 0.9,
     # The paper used 1e-4 with batch size 1024
-    'l2_reg': 1e-5,
+    # 'l2_reg': 4e-5,
+    'l2_reg': 4e-6,
     'gamma': 0.997,
     # The epsilon used in the formula for the invertible transform of model outputs.
     'scaling_epsilon': 0.001,
@@ -153,14 +156,15 @@ ATARI_DEFAULT_CONFIG = config({
     # The paper uses batch size of 1024
     'train_batch_size': 32,
     # The max number of observations the replay buffer can store.
-    'buffer_size': 65536,
+    'buffer_size': 35000,
     # If set, this will fix the ratio of replayed from a buffer and learned
     # on timesteps to sampled from an environment and stored in the replay
     # buffer timesteps. Otherwise, replay will proceed as fast as possible.
     'training_intensity': None,
     # If you set a training_intensity, then this must be 0.
-    'learning_starts': 1024,
-    'rollout_fragment_length': 64,  # Number of steps of experience ot generate before saving batch
+    'learning_starts': 512,
+    # Deprecated. Set to batch size.
+    'rollout_fragment_length': 48,
     'minibatch_buffer_size': 1,
     'num_sgd_iter': 1,
     'learner_queue_size': 8,
@@ -176,7 +180,7 @@ ATARI_DEFAULT_CONFIG = config({
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.25,
         # The paper used 50, but showed that it could work with as little as 7
-        'num_simulations': 15,
+        'num_simulations': 20,
         'argmax_tree_policy': False,
         'puct_c1': 1.25,
         'puct_c2': 19652,

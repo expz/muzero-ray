@@ -160,6 +160,12 @@ class MCTS:
         self.add_dirichlet_noise = mcts_config["add_dirichlet_noise"]
         self.dir_epsilon = mcts_config["dirichlet_epsilon"] if 'dirichlet_epsilon' in mcts_config else 0
         self.dir_alpha = mcts_config["dirichlet_alpha"] if 'dirichlet_alpha' in mcts_config else None
+
+        self._stats = {
+            'action_count': 0,
+        }
+        for i in range(self.model.action_space_size):
+            self._stats[f'action_{i}_count'] = 0
     
     @property
     def temperature(self):
@@ -201,6 +207,9 @@ class MCTS:
             # Traverse to a leaf using choices based on upper confidence bounds
             leaves = [node.select() for node in nodes]
             if i > 0:
+                for leaf in leaves:
+                    self._stats[f'action_{leaf.action}_count'] += 1
+                    self._stats['action_count'] += 1
                 prev_batch_state = tf.convert_to_tensor([leaf.parent.state for leaf in leaves])
                 batch_action = tf.convert_to_tensor([leaf.action for leaf in leaves])
                 batch_state_tf, batch_reward_tf = self.model.dynamics(prev_batch_state, batch_action)
@@ -213,23 +222,29 @@ class MCTS:
 
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation_np(batch_reward, self.model.reward_basis_np)
-                #batch_reward = self.model.untransform(batch_reward)
+                batch_reward = self.model.untransform(batch_reward)
                 for j, state in enumerate(np.vsplit(batch_state, batch_state.shape[0])):
                     leaves[j].state = np.squeeze(state)
                     leaves[j].reward = batch_reward[j]
-            batch_value_tf, children_priors_tf = self.model.prediction(batch_state_tf)
+
+            batch_value_raw_tf, children_priors_tf = self.model.prediction(batch_state_tf)
+            if self.model.is_value_categorical:
+                batch_value_tf = self.model.untransform(
+                    self.model.expectation(batch_value_raw_tf, self.model.value_basis)
+                )
+            else:
+                batch_value_tf = self.model.untransform(batch_value_raw_tf)
+
             batch_value = batch_value_tf.numpy()
             children_priors = children_priors_tf.numpy()
 
             # This is required to prevent GPU OOM
             del batch_state_tf
             if batch_reward_tf is not None: del batch_reward_tf
+            del batch_value_raw_tf
             del batch_value_tf
             del children_priors_tf
 
-            if self.model.is_value_categorical:
-                batch_value = self.model.expectation_np(batch_value, self.model.value_basis_np)
-            #batch_value = self.model.untransform(batch_value).numpy()
             if self.add_dirichlet_noise:
                 noise = np.random.dirichlet([self.dir_alpha] * self.model.action_space_size)
                 children_priors = (1 - self.dir_epsilon) * children_priors + self.dir_epsilon * noise
@@ -263,6 +278,9 @@ class MCTS:
         for node in nodes:
             del node
         return values, tree_policies, actions
+
+    def stats(self):
+        return self._stats
 
 
 class TFMCTS:
@@ -317,13 +335,10 @@ class TFMCTS:
         self.max_q = tf.math.maximum(q, self.max_q)
 
     def compute_action(self, obs):
-        #print('in compute_action', self.bomb_fuse)
         if self.reset_q_bounds_per_node:
             self.reset_q_bounds()
         batch_state = self.model.representation(obs)
-        #print('original batch state', batch_state.shape)
         states = tf.unstack(batch_state)
-        #print('states', len(states), states[0].shape)
         nodes = [
             RootNode(
                 reward=0.,
@@ -332,7 +347,6 @@ class TFMCTS:
             )
             for state in states
         ]
-        #print('before loop')
         for i in range(self.num_sims):
             # Traverse to a leaf using choices based on upper confidence bounds
             leaves = [node.select() for node in nodes]
@@ -342,14 +356,14 @@ class TFMCTS:
                 batch_state, batch_reward = self.model.dynamics(batch_state, batch_action)
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation(batch_reward, self.model.reward_basis)
-                #batch_reward = self.model.untransform(batch_reward)
+                batch_reward = self.model.untransform(batch_reward)
                 for j, state in enumerate(tf.unstack(batch_state)):
                     leaves[j].state = state
                     leaves[j].reward = batch_reward[j]
             batch_value, children_priors = self.model.prediction(batch_state)
             if self.model.is_value_categorical:
                 batch_value = self.model.expectation(batch_value, self.model.value_basis)
-            #batch_value = self.model.untransform(batch_value)
+            batch_value = self.model.untransform(batch_value)
             if self.add_dirichlet_noise:
                 noise = self.dirichlet.sample(1)
                 children_priors = (1 - self.dir_epsilon) * children_priors + self.dir_epsilon * noise

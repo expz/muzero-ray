@@ -1,14 +1,60 @@
 """
 Code from https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/metric_ops.py
 """
+import logging
 from typing import Any, List
 import time
 
+import ray
 from ray.util.iter import LocalIterator
 
 from muzero.policy import STEPS_SAMPLED_COUNTER
 from muzero.worker_set import WorkerSet
 from muzero.metrics import collect_episodes, summarize_episodes
+
+
+logger = logging.getLogger(__name__)
+
+
+class RecordWorkerStats:
+    TIMEOUT_SECONDS = 18.0
+
+    def __init__(self, workers):
+        self.workers = workers.remote_workers()
+    
+    def __call__(self, batch):
+        pending = [
+            worker.get_metrics.remote() for worker in self.workers
+        ]
+        collected, to_be_collected = ray.wait(
+            pending, num_returns=len(pending), timeout=self.TIMEOUT_SECONDS)
+        if pending and len(collected) == 0:
+            logger.warning(
+                "WARNING: collected no worker metrics in {} seconds".format(
+                    self.TIMEOUT_SECONDS))
+            return batch
+        metrics = ray.get(collected)
+        stats = {
+            'mcts': {},
+            'mem': {},
+        }
+        stats['mcts'].update(metrics[0]['mcts'])
+        action_space_size = 0
+        for key in stats['mcts']:
+            if 'action_' in key and len(key) > 12:
+                # Count action_{i}_count keys and skip action_count key
+                action_space_size += 1
+        for metric in metrics[1:]:
+            d = metric['mcts']
+            for key in d:
+                stats['mcts'][key] += d[key]
+        for i in range(action_space_size):
+            stats['mcts'][f'action_{i}_count_pct'] = stats['mcts'][f'action_{i}_count'] / stats['mcts']['action_count']
+        for i, metric in enumerate(metrics):
+            for key in metric['mem']:
+                stats['mem'][f'worker_{i}_{key}'] = metric['mem'][key]
+        LocalIterator.get_metrics().info.update(stats)
+        return batch
 
 
 def StandardMetricsReporting(

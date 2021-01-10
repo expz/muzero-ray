@@ -22,7 +22,7 @@ import tensorflow as tf
 from muzero.learner_thread import LearnerThread
 from muzero.muzero import ATARI_DEFAULT_CONFIG, BOARD_DEFAULT_CONFIG
 from muzero.ops.concurrency_ops import Concurrently, Enqueue, Dequeue
-from muzero.ops.metric_ops import StandardMetricsReporting
+from muzero.ops.metric_ops import StandardMetricsReporting, RecordWorkerStats
 from muzero.ops.replay_ops import Replay, StoreToReplayBuffer, CalculatePriorities
 from muzero.ops.rollout_ops import ParallelRollouts
 from muzero.policy import STEPS_SAMPLED_COUNTER, STEPS_TRAINED_COUNTER
@@ -46,17 +46,17 @@ class BroadcastUpdateLearnerWeights:
 
     def __call__(self, item):
         actor, batch = item
+        global_vars = {"timestep": LocalIterator.get_metrics().counters[STEPS_SAMPLED_COUNTER]}
         self.steps_since_broadcast[actor] += 1
-        if (self.steps_since_broadcast[actor] >= self.broadcast_interval
-                and self.learner_thread.weights_updated):
-            self.weights = ray.put(self.workers.local_worker().get_weights())
-            self.steps_since_broadcast[actor] = 0
-            self.learner_thread.weights_updated = False
+        if self.steps_since_broadcast[actor] >= self.broadcast_interval:
+            if self.learner_thread.weights_updated:
+                self.weights = ray.put(self.workers.local_worker().get_weights())
+                self.steps_since_broadcast[actor] = 0
+                self.learner_thread.weights_updated = False
             # Update metrics.
             metrics = LocalIterator.get_metrics()
             metrics.counters["num_weight_broadcasts"] += 1
-        global_vars = {"timestep": LocalIterator.get_metrics().counters[STEPS_SAMPLED_COUNTER]}
-        actor.set_weights.remote(self.weights, global_vars)
+            actor.set_weights.remote(self.weights, global_vars)
         # Also update global vars of the local worker.
         self.workers.local_worker().set_global_vars(global_vars)
 

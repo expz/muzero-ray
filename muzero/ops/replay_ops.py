@@ -26,11 +26,14 @@ class CalculatePriorities:
         observed_return = 0
         for m in range(self.n):
             b, k = q.get_nowait()
-            search_value += self.gamma**m * b[SampleBatch.VF_PREDS][k]
-            observed_return += self.gamma**m * b[SampleBatch.REWARDS][k]
+            if m < self.n - 1:
+                observed_return += self.gamma**m * b[SampleBatch.REWARDS][k]
+            else:
+                observed_return += b[SampleBatch.VF_PREDS][k]
             q.put((b, k))
         #print('search_value', search_value, 'observed_return', observed_return, 'gamma', self.gamma)
         b, k = q.get_nowait()
+        search_value = b[SampleBatch.VF_PREDS][k]
         b_frame = b.slice(k, k + 1)
         b_frame[PRIORITIES] = [abs(search_value - observed_return)]
         return b_frame

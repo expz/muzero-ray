@@ -69,7 +69,7 @@ def collect_episodes(
 
     if remote_workers:
         pending = [
-            a.apply.remote(lambda ev: ev.get_metrics()) for a in remote_workers
+            a.apply.remote(lambda ev: ev.get_episode_metrics()) for a in remote_workers
         ] + to_be_collected
         collected, to_be_collected = ray.wait(
             pending, num_returns=len(pending), timeout=timeout_seconds * 1.0)
@@ -82,7 +82,7 @@ def collect_episodes(
         metric_lists = []
 
     if local_worker:
-        metric_lists.append(local_worker.get_metrics())
+        metric_lists.append(local_worker.get_episode_metrics())
     episodes = []
     for metrics in metric_lists:
         episodes.extend(metrics)

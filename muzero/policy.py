@@ -17,7 +17,6 @@ STEPS_TRAINED_COUNTER = "num_steps_trained"
 GRAD_WAIT_TIMER = "grad_wait"
 SAMPLE_TIMER = "sample"
 
-# Instant metrics (keys for metrics.info).
 LEARNER_INFO = "learner"
 
 VALUE_TARGETS = "value_targets"

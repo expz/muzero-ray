@@ -15,6 +15,7 @@ from muzero.sample_batch import SampleBatch, DEFAULT_POLICY_ID
 
 PRIO_WEIGHTS = 'weights'
 PRIORITIES = 'priorities'
+MIN_ALLOWED_PRIORITY = 0.1
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,10 @@ class StructureList(tf.Module):
     for slot, value in zip(flattened_slots, flattened_values):
       update = tf.IndexedSlices(value, rows)
       self._slot2storage_map[slot].scatter_update(update, use_locking=True)
+      # Not sure if this is necessary
+      del update
+    # Not sure if this is necessary
+    del flattened_values
 
   def select(self, indices, slots=None):
     def _gather(tensor):
@@ -281,17 +286,32 @@ class IntPairSumTree(SumTree):
   def get_by_index(self, idx):
     return self._id_tree[self._node_to_index(self._get_node_for_id(idx))]
 
-  def update(self, id_, weight):
+  def update(self, id_, new_weight):
     node = self._get_node_for_id(id_)
-    #print('update ', (node.depth, node.num), ' id:', id_)
-    delta = weight - self._id_tree[self._node_to_index(node)]
+    old_weight = self._id_tree[self._node_to_index(node)]
+    delta = new_weight - old_weight
+
     self._total += delta
-    self._min = min(self._min, weight)
-    self._max = max(self._max, weight)
     self._id_tree[self._node_to_index(node)] += delta
     while self._parent(node):
       node = self._parent(node)
       self._id_tree[self._node_to_index(node)] += delta
+
+    # If the weight we are updating used to be min or max, then find new min or max
+    if self._min == old_weight:
+      self._min = new_weight
+      for i in range(min(self._next_element_id, self.capacity)):
+        # TODO: This hack shouldn't be necessary
+        if self._id_tree[self._leaf_offset + i] > 0:
+          self._min = min(self._min, self._id_tree[self._leaf_offset + i])
+    else:
+      self._min = min(self._min, new_weight)
+    if self._max == old_weight:
+      self._max = new_weight
+      for i in range(min(self._next_element_id, self.capacity)):
+        self._max = max(self._max, self._id_tree[self._leaf_offset + i])
+    else:
+      self._max = max(self._max, new_weight)
     
   def contains(self, a, b):
     return (a, b) in self._pairs
@@ -350,6 +370,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     """
     assert len(item[SampleBatch.EPS_ID]) == 1
     assert len(item['t']) == 1
+    # Silently ignore
+    if 0 <= p < MIN_ALLOWED_PRIORITY:
+      p = MIN_ALLOWED_PRIORITY
     #print('sample keys:', sorted([(field, item[field].shape) for field in item.data]))
     episode, step = item[SampleBatch.EPS_ID][0], item["t"][0]
     if p == -1:
@@ -361,7 +384,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     overwritten = self._tree.add(episode, step, priority)
     if overwritten is not None:
       eps, st = overwritten
-      del self._episode_steps[(eps, st)]
+      if (eps, st) in self._episode_steps:
+        del self._episode_steps[(eps, st)]
     obs = np.expand_dims(item[SampleBatch.CUR_OBS][0], axis=0)
     cnt = obs.shape[-1] // self.channels_per_frame
     simple_obs = [
@@ -422,15 +446,18 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     exclude_fields = set([
       SampleBatch.CUR_OBS, SampleBatch.EPS_ID, SampleBatch.UNROLL_ID,
     ])
-    #print('_fields', [(field, type(field)) for field in self._fields])
     data.update({
       field: field_val(item, field, step_count, i)
       for i, field in enumerate(self._fields)
       if field not in exclude_fields
     })
     batch = tuple(data[field] for field in self._fields)
-    #print('batch', [(field, batch[i].shape) for i, field in enumerate(self._fields)])
     self._steps.add_batch(batch, rows)
+    # Not sure if this is necessary
+    for row in rows:
+      del row
+    del batch
+    del data
     return priority
 
   def sample(self, num_items: int, trajectory_len: int = None) -> SampleBatch:
@@ -497,7 +524,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     #print('next id: ', self._tree.next_id, 'first priority:', priorities[0])
     assert len(idxes) == len(priorities)
     for idx, priority in zip(idxes, priorities):
-      assert priority > 0
+      if priority < MIN_ALLOWED_PRIORITY:
+        priority = MIN_ALLOWED_PRIORITY
       self._tree.update(idx, priority**self.alpha)
 
   def stats(self, debug=False):
@@ -506,6 +534,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       "sampled_count": self._batches_sampled,
       "est_size_bytes": self._steps.size_bytes()[1],
       "num_entries": self._steps.length,
+      "tree_min": self._tree.min,
+      "tree_max": self._tree.max,
     }
     return data
 
@@ -604,6 +634,8 @@ class LocalReplayBuffer(ParallelIteratorWorker):
                     p = -1  # -1 means unknown
                 self.priority_total += self.replay_buffers[DEFAULT_POLICY_ID].add(s, p=p)
                 self.num_added += 1
+        # Not sure if this is necessary
+        del b
 
     def replay(self):
         if self._fake_batch:

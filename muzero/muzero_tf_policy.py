@@ -69,6 +69,9 @@ class MuZeroLoss:
         # once done with looping, convert it to a tensor
         policy_preds = tf.transpose(tf.convert_to_tensor(policy_preds), perm=(1, 0, 2))
 
+        # Transform reward targets
+        reward_targets = model.transform(reward_targets)
+
         K = int(reward_targets.shape[1])
         w = [1.]
         w.extend([1. / K] * (K - 1))
@@ -93,7 +96,7 @@ class MuZeroLoss:
             ),
             axis=-1
         )
-        self.total_loss = prio_weights * (self.total_reward_loss + self.total_vf_loss + self.total_policy_loss)
+        self.total_loss = self.total_reward_loss + self.total_vf_loss + self.total_policy_loss
 
         for t in model.trainable_variables():
             try:
@@ -105,8 +108,10 @@ class MuZeroLoss:
         self.vf_loss = tf.math.reduce_mean(self.total_vf_loss)
         self.policy_loss = tf.math.reduce_mean(self.total_policy_loss)
         self.weighted_reward_loss = tf.math.reduce_mean(self.total_reward_loss * prio_weights)
-        self.weighted_vf_loss = tf.math.reduce_mean(self.total_vf_loss * prio_weights)
+        self.total_weighted_vf_loss = self.total_vf_loss * prio_weights
+        self.weighted_vf_loss = tf.math.reduce_mean(self.total_weighted_vf_loss)
         self.weighted_policy_loss = tf.math.reduce_mean(self.total_policy_loss * prio_weights)
+        # self.loss = self.reward_loss + self.vf_loss + self.policy_loss + self.regularization
         self.loss = self.weighted_reward_loss + self.weighted_vf_loss + self.weighted_policy_loss + self.regularization
 
         return self.loss
@@ -247,7 +252,8 @@ class MuZeroTFPolicy(TFPolicy):
     def get_actions(self, obs_batch: TensorType, is_training: bool):
         value, action_probs = self.model.forward_with_value(obs_batch, is_training=is_training)
 
-        #value = self.model.untransform(value)
+        if not is_training:
+            value = self.model.transform(value)
 
         action_probs = tf.convert_to_tensor(action_probs)
         action_dist = tfp.distributions.Categorical(probs=action_probs)
@@ -259,7 +265,7 @@ class MuZeroTFPolicy(TFPolicy):
                      rewards,
                      vf_preds):
         #rewards = self.model.untransform(rewards)
-        #vf_preds = self.model.untransform(vf_preds)
+        vf_preds = self.model.untransform(vf_preds)
         vf_preds = np.reshape(vf_preds, (-1,))
 
         # This calculates
@@ -287,7 +293,7 @@ class MuZeroTFPolicy(TFPolicy):
             value_target += t[k:N + k] * gamma_k
         value_target = value_target.astype(np.float32)
 
-        return value_target  # self.model.transform(value_target)
+        return self.model.transform(value_target)
       
     def postprocess_trajectory(
         self,
@@ -325,7 +331,7 @@ class MuZeroTFPolicy(TFPolicy):
 
         sample_batch['rollout_values'] = rollout(value_target)
 
-        sample_batch['rollout_rewards'] = rollout(rewards)  # rollout(self.model.untransform(rewards))
+        sample_batch['rollout_rewards'] = rollout(rewards)  # rollout(self.model.transform(rewards))
 
         return sample_batch
 
@@ -379,7 +385,7 @@ class MuZeroTFPolicy(TFPolicy):
             'weighted_policy_loss': self.loss_obj.weighted_policy_loss.numpy(),
             'regularization': self.loss_obj.regularization.numpy(),
         }
-        stats['replay_p'] = self.loss_obj.total_vf_loss.numpy()
+        stats['replay_p'] = self.loss_obj.total_weighted_vf_loss.numpy()
         return stats
 
     def variables(self):

@@ -4,8 +4,12 @@ Some code from https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/evaluatio
 
 from __future__ import annotations
 
+import gc
+import os
 import pickle
+import psutil
 import queue
+import resource
 import time
 from typing import Callable, TypeVar, List
 
@@ -14,6 +18,7 @@ from ray.util.iter import ParallelIteratorWorker
 
 from muzero.sample_batch import SampleBatch
 from muzero.rollout_metrics import PerfStats, RolloutMetrics
+from muzero.util import getsize
 
 T = TypeVar("T")
 
@@ -148,8 +153,11 @@ class RolloutWorker(ParallelIteratorWorker):
                     self.eps_id[j] = self._generate_eps_id()
                     self.step_id[j] = 0
             i += len(self.envs)
-        batch = self.policy.postprocess_trajectory(SampleBatch(batch))
-        return batch
+        sample_batch = self.policy.postprocess_trajectory(SampleBatch(batch))
+        del batch
+        gc.collect()
+        # print(f'worker_{self._worker_index}:', self.mem_stats())
+        return sample_batch
 
     def get_weights(self):
         return self.policy.get_weights()
@@ -163,7 +171,31 @@ class RolloutWorker(ParallelIteratorWorker):
         self.global_vars = global_vars
         self.policy.set_global_vars(global_vars)
 
-    def get_metrics(self) -> List[RolloutMetrics]:
+    def mem_stats(self):
+        #rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+        #shr = resource.getrusage(resource.RUSAGE_SELF).ru_ixrss / 1024.0
+        process = psutil.Process(os.getpid())
+        mi = process.memory_info()
+        rss = mi.rss / 1024.0 / 1024.0
+        shr = mi.shared / 1024.0 / 1024.0
+        return {
+            'worker_mem_mib': round(rss - shr, 2),
+            'worker_shared_mib': round(shr, 2),
+            'mcts_size_mib': round(getsize(self.policy.model.mcts) / 1024.0 / 1024.0, 2),
+            'policy_size_mib': round(getsize(self.policy) / 1024.0 / 1024.0, 2),
+            'worker_size_mib': round(getsize(self) / 1024.0 / 1024.0, 2)
+        }
+
+    def get_metrics(self):
+        stats = {
+            'mcts': {},
+            'mem': {},
+        }
+        stats['mcts'].update(self.policy.model.mcts.stats())
+        stats['mem'].update(self.mem_stats())
+        return stats
+
+    def get_episode_metrics(self) -> List[RolloutMetrics]:
         """Returns a list of new RolloutMetric objects from evaluation."""
         out = []
         while True:

@@ -6,7 +6,7 @@ lz4
 numpy
 pandas
 pillow
-ray[tune]==0.8.7
+ray[tune]
 sortedcontainers
 tensorboardX
 tensorflow-gpu==2.4.0
