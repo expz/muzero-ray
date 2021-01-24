@@ -91,7 +91,7 @@ class RolloutWorker(ParallelIteratorWorker):
         return self._m * self._num_workers + self._worker_index
 
     def sample(self):
-        N = self.config['train_batch_size']
+        N = self.config['replay_batch_size']
         batch = {}
         batch[SampleBatch.CUR_OBS] = []
         batch[SampleBatch.ACTIONS] = []

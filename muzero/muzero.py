@@ -141,7 +141,7 @@ ATARI_DEFAULT_CONFIG = config({
     # The paper used 10, and 5 for the reanalyze version
     'n_step': 6,
     # The paper used 0.05 with batch size 1024
-    'lr': 0.0004,
+    'lr': 0.002,
     'lr_schedule': None,
     # The paper used 0.9 with batch size 1024
     'momentum': 0.9,
@@ -153,10 +153,12 @@ ATARI_DEFAULT_CONFIG = config({
     'scaling_epsilon': 0.001,
     'grad_clip': 40.0,
     'value_loss_weight': 0.25,  # See Reanalyze appendix
+    # The number of frames to generate before returning
+    'replay_batch_size': 48,
     # The paper uses batch size of 1024
-    'train_batch_size': 32,
+    'train_batch_size': 48,
     # The max number of observations the replay buffer can store.
-    'buffer_size': 35000,
+    'buffer_size': 100000,
     # If set, this will fix the ratio of replayed from a buffer and learned
     # on timesteps to sampled from an environment and stored in the replay
     # buffer timesteps. Otherwise, replay will proceed as fast as possible.
