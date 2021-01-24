@@ -47,7 +47,6 @@ def main(args):
         'learning_starts': 256,
         'timesteps_per_iteration': 512,
         'buffer_size': 100000,
-        'train_batch_size': 48,
         'optimizer': {
             'num_replay_buffer_shards': 1,
             'debug': False,
