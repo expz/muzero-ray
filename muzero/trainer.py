@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import collections
 import copy
-import datetime
+from datetime import datetime
 import os
 import pickle
 import tempfile
 import time
 from typing import Callable, Tuple
 
+import numpy as np
 import ray
 from ray.actor import ActorHandle
 from ray.tune import Trainable
@@ -28,6 +29,7 @@ from muzero.ops.rollout_ops import ParallelRollouts
 from muzero.policy import STEPS_SAMPLED_COUNTER, STEPS_TRAINED_COUNTER
 from muzero.replay_buffer import ReplayActor, PRIO_WEIGHTS
 from muzero.sample_batch import SampleBatch
+from muzero.structure_list import ArraySpec
 from muzero.util import create_colocated
 from muzero.worker_set import WorkerSet
 
@@ -70,6 +72,7 @@ class MuZeroTrainer(Trainable):
         From https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/agents/trainer.py
         """
         self._env_id = env or config['env']
+        self._name = 'MuZeroTrainer'
 
         tf.get_logger().setLevel(config['log_level'])
 
@@ -111,18 +114,18 @@ class MuZeroTrainer(Trainable):
         loss_steps = self.config['loss_steps']
         action_count = self.env_creator({}).action_space.n
         tensor_spec = (
-            tf.TensorSpec((96, 96, n_channels), tf.float32, SampleBatch.CUR_OBS),
-            tf.TensorSpec((1,), tf.int32, SampleBatch.EPS_ID),
-            tf.TensorSpec((1,), tf.int32, SampleBatch.UNROLL_ID),
-            tf.TensorSpec((loss_steps,), tf.int32, SampleBatch.ACTIONS),
-            tf.TensorSpec((action_count,), tf.float32, 'action_dist_probs'),
-            tf.TensorSpec((1,), tf.float32, SampleBatch.ACTION_PROB),
-            tf.TensorSpec((1,), tf.float32, SampleBatch.ACTION_LOGP),
-            tf.TensorSpec((1,), tf.bool, SampleBatch.DONES),
-            tf.TensorSpec((1,), tf.float32, SampleBatch.REWARDS),
-            tf.TensorSpec((loss_steps, action_count), tf.float32, 'rollout_policies'),
-            tf.TensorSpec((loss_steps,), tf.float32, 'rollout_rewards'),
-            tf.TensorSpec((loss_steps,), tf.float32, 'rollout_values'),
+            ArraySpec((96, 96, n_channels), np.float32, SampleBatch.CUR_OBS),
+            ArraySpec((1,), np.int32, SampleBatch.EPS_ID),
+            ArraySpec((1,), np.int32, SampleBatch.UNROLL_ID),
+            ArraySpec((loss_steps,), np.int32, SampleBatch.ACTIONS),
+            ArraySpec((action_count,), np.float32, 'action_dist_probs'),
+            ArraySpec((1,), np.float32, SampleBatch.ACTION_PROB),
+            ArraySpec((1,), np.float32, SampleBatch.ACTION_LOGP),
+            ArraySpec((1,), np.bool, SampleBatch.DONES),
+            ArraySpec((1,), np.float32, SampleBatch.REWARDS),
+            ArraySpec((loss_steps, action_count), np.float32, 'rollout_policies'),
+            ArraySpec((loss_steps,), np.float32, 'rollout_rewards'),
+            ArraySpec((loss_steps,), np.float32, 'rollout_values'),
         )
 
         # There's no way to control where the ReplayActors are located in a multi-node setup, so
@@ -294,6 +297,9 @@ class MuZeroTrainer(Trainable):
                 r.restore.remote(remote_state)
         if "optimizer" in state:
             self.optimizer.restore(state["optimizer"])
+
+    def get_policy(self):
+        return self.workers.local_worker().policy
 
     @classmethod
     def default_resource_request(

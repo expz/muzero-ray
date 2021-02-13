@@ -23,12 +23,10 @@ class MuZeroTFModelV2:
                  model_config: Dict[str, Any]):
         self.config = model_config
 
-        from tensorflow.compat.v1 import ConfigProto
-        from tensorflow.compat.v1 import InteractiveSession
+        #from tensorflow.compat.v1 import ConfigProto
 
-        config = ConfigProto()
-        config.gpu_options.allow_growth = True
-        session = InteractiveSession(config=config)
+        #config = ConfigProto()
+        #config.gpu_options.allow_growth = True
 
         self.input_shape = obs_space.shape
         obs_input = tf.keras.Input(self.input_shape)

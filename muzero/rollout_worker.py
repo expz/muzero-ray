@@ -60,7 +60,10 @@ class RolloutWorker(ParallelIteratorWorker):
 
         ParallelIteratorWorker.__init__(self, rollout, False)
 
-        assert config['envs_per_worker'] > 0
+        # With more than one environment, postprocess_trajectories would have
+        # to sort through the events in a batch to extract trajectories for
+        # each separate environment for rollups.
+        assert config['envs_per_worker'] == 1, "postprocess_trajectories() does no support more than one environment per worker"
         self.envs = [
             env_creator({})
             for _ in range(config['envs_per_worker'])

@@ -249,6 +249,16 @@ class MuZeroTFPolicy(TFPolicy):
 
         return actions.numpy(), [], batch
 
+    def compute_action(self, obs, greedy=False, mcts=True):
+        value, action_probs = self.model.forward_with_value(tf.expand_dims(obs, 0), is_training=not mcts)
+
+        action_probs = tf.convert_to_tensor(action_probs)
+        if greedy:
+            return tf.math.argmax(tf.squeeze(action_probs)).numpy()
+        else:
+            action_dist = tfp.distributions.Categorical(probs=action_probs)
+            return tf.squeeze(action_dist.sample(1)).numpy()
+
     def get_actions(self, obs_batch: TensorType, is_training: bool):
         value, action_probs = self.model.forward_with_value(obs_batch, is_training=is_training)
 
@@ -308,12 +318,15 @@ class MuZeroTFPolicy(TFPolicy):
         rewards = sample_batch[SampleBatch.REWARDS]
         vf_preds = sample_batch[SampleBatch.VF_PREDS]
         value_target = self.value_target(rewards, vf_preds)
+        eps_ids = sample_batch[SampleBatch.EPS_ID]
         
         N = len(rewards)
+        #print('rewards:', rewards.shape, 'action_dist_probs:', sample_batch['action_dist_probs'].shape, 'actions:', sample_batch[SampleBatch.ACTIONS].shape)
+        
         def rollout(values):
-            """Matrix of shape (N, loss_steps) """
+            """Matrix of shape (N, loss_steps)"""
             arr = np.array([
-                values if i == 0 else np.concatenate((values[i:], [values[-1] for _ in range(min(i, N))]))
+                values if i == 0 else np.concatenate((values[i:], [values[-1] for _ in range(min(i, N))]), axis=0)
                 for i in range(self.loss_steps)
             ])
             if len(arr.shape) == 3:
@@ -325,9 +338,11 @@ class MuZeroTFPolicy(TFPolicy):
 
         actions = sample_batch[SampleBatch.ACTIONS]
         sample_batch[SampleBatch.ACTIONS] = rollout(actions)
+        #print('new actions', sample_batch[SampleBatch.ACTIONS].shape)
 
         action_dist_inputs = sample_batch['action_dist_probs']
         sample_batch['rollout_policies'] = rollout(action_dist_inputs)
+        #print('rollout policies', sample_batch['rollout_policies'].shape)
 
         sample_batch['rollout_values'] = rollout(value_target)
 

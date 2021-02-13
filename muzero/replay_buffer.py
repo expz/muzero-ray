@@ -11,6 +11,7 @@ from ray.util.iter import ParallelIteratorWorker
 from ray.util.timer import _Timer as TimerStat
 
 from muzero.sample_batch import SampleBatch, DEFAULT_POLICY_ID
+from muzero.structure_list import NPStructureList
 
 
 PRIO_WEIGHTS = 'weights'
@@ -30,70 +31,6 @@ def log2(n):
     log += 1
     i *= 2
   return log
-
-
-class StructureList(tf.Module):
-  """
-  Some code copied from
-  https://github.com/tensorflow/agents/blob/master/tf_agents/replay_buffers/table.py
-  """
-  def __init__(self, length, tensor_spec, scope='structure_list'):
-    super(StructureList, self).__init__(name='StructureList')
-    self._tensor_spec = tensor_spec
-    self.length = length
-
-    def _create_unique_slot_name(spec):
-      return tf.compat.v1.get_default_graph().unique_name(spec.name or 'slot')
-
-    self._slots = tf.nest.map_structure(_create_unique_slot_name,
-                                        self._tensor_spec)
-
-    def _create_storage(spec, slot_name):
-      """Create storage for a slot, track it."""
-      shape = [self.length] + spec.shape.as_list()
-      new_storage = tf.Variable(
-          name=slot_name,
-          initial_value=tf.zeros(shape, dtype=spec.dtype),
-          shape=None,
-          dtype=spec.dtype)
-      return new_storage
-
-    with tf.compat.v1.variable_scope(scope):
-      self._storage = tf.nest.map_structure(_create_storage, self._tensor_spec,
-                                            self._slots)
-
-    self._slot2storage_map = dict(
-        zip(tf.nest.flatten(self._slots), tf.nest.flatten(self._storage)))
-
-  def add_batch(self, values, rows, slots=None):
-    slots = slots or self._slots
-    flattened_slots = tf.nest.flatten(slots)
-    flattened_values = tf.nest.flatten(values)
-    for slot, value in zip(flattened_slots, flattened_values):
-      update = tf.IndexedSlices(value, rows)
-      self._slot2storage_map[slot].scatter_update(update, use_locking=True)
-      # Not sure if this is necessary
-      del update
-    # Not sure if this is necessary
-    del flattened_values
-
-  def select(self, indices, slots=None):
-    def _gather(tensor):
-      return tf.gather(tensor,
-                       tf.convert_to_tensor(indices, dtype=tf.int32),
-                       axis=0)
-
-    slots = slots or self._slots
-    return tf.nest.map_structure(_gather, self._storage)
-
-  def size_bytes(self):
-    storage_size = 0
-    storage_bytes = 0
-    for var in tf.nest.flatten(self._storage):
-      var_size = var.shape.num_elements()
-      storage_size += var_size
-      storage_bytes += var_size * var.dtype.size
-    return storage_size, storage_bytes
 
 Node = namedtuple('Node', ['depth', 'num'])
 
@@ -319,14 +256,14 @@ class IntPairSumTree(SumTree):
 
 class ReplayBuffer(tf.Module):
 
-  def __init__(self, capacity, tensor_spec, scope='replay_buffer', name='ReplayBuffer'):
+  def __init__(self, capacity, array_spec, scope='replay_buffer', name='ReplayBuffer'):
     super(ReplayBuffer, self).__init__(name=name)
-    self._tensor_spec = tensor_spec
+    self._array_spec = array_spec
     self._capacity = capacity
     self._scope = scope
 
-    if isinstance(tensor_spec, tuple):
-      self._fields = [spec.name for spec in tensor_spec]
+    if isinstance(array_spec, tuple):
+      self._fields = [spec.name for spec in array_spec]
     else:
       self._fields = None
 
@@ -339,12 +276,12 @@ class ReplayBuffer(tf.Module):
 
 class PrioritizedReplayBuffer(ReplayBuffer):
 
-  def __init__(self, capacity, tensor_spec,
+  def __init__(self, capacity, array_spec,
                scope='prioritized_replay_buffer', alpha=1, beta=1,
                frames_per_obs=32):
     super(PrioritizedReplayBuffer, self).__init__(
       capacity,
-      tensor_spec,
+      array_spec,
       scope,
       'PrioritizedReplayBuffer')
     self.alpha = alpha
@@ -353,7 +290,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     # Tree of (episode, frame) pairs with priorities
     self._tree = IntPairSumTree(capacity)
     # Buffer of frames
-    self._steps = StructureList(capacity, tensor_spec, scope='frame_buffer')
+    self._steps = NPStructureList(capacity, array_spec, scope='frame_buffer')
     # (episode, step) => (index of step in self._steps, id of step in self._tree)
     self._episode_steps = {}
     self._batches_added = 0
@@ -361,7 +298,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     self.channels_per_frame = 1
     for i, field in enumerate(self._fields):
       if field == SampleBatch.CUR_OBS:
-        self.channels_per_frame = tensor_spec[i].shape[-1]
+        self.channels_per_frame = array_spec[i].shape[-1]
     self.frames_per_obs = frames_per_obs
 
   def add(self, item: SampleBatch, p: float):
@@ -433,7 +370,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       else:
         zeros_shape = (step_count - 1,) + tuple(item[field].shape)
         data = np.expand_dims(item[field], axis=0)
-      zeros = np.full(zeros_shape, 0, dtype=self._tensor_spec[i].dtype.as_numpy_dtype)
+      zeros = np.full(zeros_shape, 0, dtype=self._array_spec[i].dtype)
       return np.concatenate([zeros, data])
  
     step_count = len(os)
@@ -502,14 +439,18 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         obs = np.transpose(obs, axes=axes)
       for i, field in enumerate(self._fields):
         if field == SampleBatch.CUR_OBS:
-          data[field].append(np.expand_dims(obs, axis=0))
+          data[field].append(obs)
         elif len(item[i][0].shape) == 1 and item[i][0].shape[0] == 1:
           data[field].append(item[i][0][0])
         else:
           data[field].append(item[i][0])
 
+    #print(data['rollout_policies'][0].shape)
+    #print(len(data['rollout_policies']))
+    #import time
+    #time.sleep(3)
     data_np = {
-      field: np.vstack(data[field]) if isinstance(data[field][0], np.ndarray) else np.array(data[field])
+      field: np.array(data[field]) if isinstance(data[field][0], np.ndarray) else np.array(data[field])
       for field in self._fields
     }
     #print('data_np', [(field, data_np[field].shape) for field in data_np])
@@ -550,7 +491,7 @@ class LocalReplayBuffer(ParallelIteratorWorker):
     may be created to increase parallelism."""
 
     def __init__(self,
-                 tensor_spec,
+                 array_spec,
                  num_shards,
                  learning_starts,
                  buffer_size,
@@ -590,7 +531,7 @@ class LocalReplayBuffer(ParallelIteratorWorker):
         def new_buffer():
             return PrioritizedReplayBuffer(
                 self.buffer_size,
-                tensor_spec,
+                array_spec,
                 alpha=prioritized_replay_alpha,
                 beta=prioritized_replay_beta)
 

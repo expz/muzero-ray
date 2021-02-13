@@ -128,7 +128,7 @@ ATARI_DEFAULT_CONFIG = config({
         ],
     },
     'action_type': 'atari',
-    'envs_per_worker': 4,
+    'envs_per_worker': 1,
     'preprocessor_pref': 'none',  # Prevent deepmind preprocessor from running
     'value_type': 'categorical',
     'value_max': 300,

@@ -3,6 +3,10 @@
 Train a MuZero model.
 """
 
+# Set tensorflow log level to ERROR.
+import os
+os.putenv('TF_CPP_MIN_LOG_LEVEL', '2')
+
 import argparse
 import coloredlogs
 import copy
@@ -11,7 +15,7 @@ import ray
 from ray import tune
 import tensorflow as tf
 
-tf.get_logger().setLevel('WARNING')
+tf.get_logger().setLevel('ERROR')
 
 from muzero.env import register_muzero_env
 from muzero.muzero import ATARI_DEFAULT_CONFIG
