@@ -20,7 +20,7 @@ source venv/bin/activate
 python run.py --logdir ./results --loglevel error breakout
 ```
 
-Ray dashboard will be available at https://localhost:8625. If you are running the code on a server, then run `ssh -L 8625:localhost:8625 username@server` to make the dashboard available from your local machine.
+Ray dashboard will be available at http://localhost:8625. If you are running the code on a server, then run `ssh -L 8625:localhost:8625 username@server` to make the dashboard available from your local machine.
 
 Checkpoints will be available in `./results/breakout`.
 
