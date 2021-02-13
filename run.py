@@ -41,12 +41,12 @@ def main(args):
     config = {
         'env': 'BreakoutNoFrameskip-MuZero-v1',
         'action_type': 'atari',
-        'num_workers': 4,
         'num_gpus': 1,
+        'num_workers': 4,
         'num_cpus_per_worker': 2,
         'num_gpus_per_worker': 0.5,
-        'memory_per_worker': 6 * 1024**3,
-        'object_store_memory_per_worker': 3 * 1024**3,
+        'memory_per_worker': 6 * 1024**3,  # 6 GiB
+        'object_store_memory_per_worker': 3 * 1024**3,  # 3 GiB
         'log_level': args.loglevel.upper(),
         'learning_starts': 256,
         'timesteps_per_iteration': 512,
@@ -72,9 +72,9 @@ def main(args):
     ray.init(
         num_cpus=11,
         num_gpus=3,
-        object_store_memory=20 * 1024**3,
-        _redis_max_memory=5 * 1024**3,
-        _memory=25 * 1024**3
+        #object_store_memory=20 * 1024**3,
+        #_redis_max_memory=5 * 1024**3,
+        #_memory=25 * 1024**3
     )
     try:
         if args.checkpoint:
