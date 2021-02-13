@@ -1,0 +1,10 @@
+docker
+google-api-python-client>=1.7.8
+google-cloud-storage
+grpcio
+httplib2>=0.9.1
+ipywidgets>=7.0.0
+matplotlib>=3.2.2
+packaging
+scikit-learn
+tqdm
