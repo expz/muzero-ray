@@ -139,6 +139,7 @@ class MCTS:
 
     def __init__(self, model, config, temperature=1.0):
         self.model = model
+        self.transform = config['transform_outputs']
         self.gamma = config['gamma']
 
         mcts_config = config['mcts']
@@ -222,18 +223,19 @@ class MCTS:
 
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation_np(batch_reward, self.model.reward_basis_np)
-                batch_reward = self.model.untransform(batch_reward)
+                if self.transform:
+                    batch_reward = self.model.untransform(batch_reward)
                 for j, state in enumerate(np.vsplit(batch_state, batch_state.shape[0])):
                     leaves[j].state = np.squeeze(state)
                     leaves[j].reward = batch_reward[j]
 
+            # Superstitious introduction of extra variables so they can be explicitly deleted.
             batch_value_raw_tf, children_priors_tf = self.model.prediction(batch_state_tf)
+            batch_value_tf = batch_value_raw_tf
             if self.model.is_value_categorical:
-                batch_value_tf = self.model.untransform(
-                    self.model.expectation(batch_value_raw_tf, self.model.value_basis)
-                )
-            else:
-                batch_value_tf = self.model.untransform(batch_value_raw_tf)
+                batch_value_tf = self.model.expectation(batch_value_tf, self.model.value_basis)
+            if self.transform:
+                batch_value_tf = self.model.untransform(batch_value_tf)
 
             batch_value = batch_value_tf.numpy()
             children_priors = children_priors_tf.numpy()
@@ -356,14 +358,16 @@ class TFMCTS:
                 batch_state, batch_reward = self.model.dynamics(batch_state, batch_action)
                 if self.model.is_reward_categorical:
                     batch_reward = self.model.expectation(batch_reward, self.model.reward_basis)
-                batch_reward = self.model.untransform(batch_reward)
+                if self.transform:
+                    batch_reward = self.model.untransform(batch_reward)
                 for j, state in enumerate(tf.unstack(batch_state)):
                     leaves[j].state = state
                     leaves[j].reward = batch_reward[j]
             batch_value, children_priors = self.model.prediction(batch_state)
             if self.model.is_value_categorical:
                 batch_value = self.model.expectation(batch_value, self.model.value_basis)
-            batch_value = self.model.untransform(batch_value)
+            if self.transform:
+                batch_value = self.model.untransform(batch_value)
             if self.add_dirichlet_noise:
                 noise = self.dirichlet.sample(1)
                 children_priors = (1 - self.dir_epsilon) * children_priors + self.dir_epsilon * noise

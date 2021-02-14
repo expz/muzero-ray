@@ -70,7 +70,8 @@ class MuZeroLoss:
         policy_preds = tf.transpose(tf.convert_to_tensor(policy_preds), perm=(1, 0, 2))
 
         # Transform reward targets
-        reward_targets = model.transform(reward_targets)
+        if model.config['transform_outputs']:
+            reward_targets = model.transform(reward_targets)
 
         K = int(reward_targets.shape[1])
         w = [1.]
@@ -262,7 +263,7 @@ class MuZeroTFPolicy(TFPolicy):
     def get_actions(self, obs_batch: TensorType, is_training: bool):
         value, action_probs = self.model.forward_with_value(obs_batch, is_training=is_training)
 
-        if not is_training:
+        if not is_training and self.model.config['transform_outputs']:
             value = self.model.transform(value)
 
         action_probs = tf.convert_to_tensor(action_probs)
@@ -274,8 +275,9 @@ class MuZeroTFPolicy(TFPolicy):
     def value_target(self,
                      rewards,
                      vf_preds):
-        #rewards = self.model.untransform(rewards)
-        vf_preds = self.model.untransform(vf_preds)
+        if self.model.config['transform_outputs']:
+            #rewards = self.model.untransform(rewards)
+            vf_preds = self.model.untransform(vf_preds)
         vf_preds = np.reshape(vf_preds, (-1,))
 
         # This calculates
@@ -303,25 +305,26 @@ class MuZeroTFPolicy(TFPolicy):
             value_target += t[k:N + k] * gamma_k
         value_target = value_target.astype(np.float32)
 
-        return self.model.transform(value_target)
+        if self.model.config['transform_outputs']:
+            value_target = self.model.transform(value_target)
+        
+        return value_target
       
     def postprocess_trajectory(
         self,
         sample_batch: SampleBatch) -> SampleBatch:
         """
-        Called before compute_actions:
-        https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/evaluation/sample_batch_builder.py#L193
-        https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/evaluation/sample_batch_builder.py#L252
-        https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/evaluation/sampler.py#L779
+        This function cheats at rolling up the experience into "rollouts".
+        It assumes that the batch experience is in order without missing
+        frames and is from a single episode. It cheats by making the end of
+        an episode run together with the beginning of the next episode.
         """
         
         rewards = sample_batch[SampleBatch.REWARDS]
         vf_preds = sample_batch[SampleBatch.VF_PREDS]
         value_target = self.value_target(rewards, vf_preds)
-        eps_ids = sample_batch[SampleBatch.EPS_ID]
         
         N = len(rewards)
-        #print('rewards:', rewards.shape, 'action_dist_probs:', sample_batch['action_dist_probs'].shape, 'actions:', sample_batch[SampleBatch.ACTIONS].shape)
         
         def rollout(values):
             """Matrix of shape (N, loss_steps)"""
@@ -338,15 +341,15 @@ class MuZeroTFPolicy(TFPolicy):
 
         actions = sample_batch[SampleBatch.ACTIONS]
         sample_batch[SampleBatch.ACTIONS] = rollout(actions)
-        #print('new actions', sample_batch[SampleBatch.ACTIONS].shape)
 
         action_dist_inputs = sample_batch['action_dist_probs']
         sample_batch['rollout_policies'] = rollout(action_dist_inputs)
-        #print('rollout policies', sample_batch['rollout_policies'].shape)
 
         sample_batch['rollout_values'] = rollout(value_target)
 
-        sample_batch['rollout_rewards'] = rollout(rewards)  # rollout(self.model.transform(rewards))
+        if self.model.config['transform_outputs']:
+            rewards = self.model.transform(rewards)
+        sample_batch['rollout_rewards'] = rollout(rewards)
 
         return sample_batch
 

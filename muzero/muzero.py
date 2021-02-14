@@ -149,6 +149,10 @@ ATARI_DEFAULT_CONFIG = config({
     # 'l2_reg': 4e-5,
     'l2_reg': 4e-6,
     'gamma': 0.997,
+    # Apply invertible transform of value and reward model outputs.
+    # The paper does this, but it is unclear whether I correctly implemented
+    # it, so leave it off.
+    'transform_outputs': False,
     # The epsilon used in the formula for the invertible transform of model outputs.
     'scaling_epsilon': 0.001,
     'grad_clip': 40.0,
