@@ -31,7 +31,7 @@ source venv/bin/activate
 tensorboard --logdir ./results
 ```
 
-The tensorboard will be available at https://localhost:6006. If you are running the code on a server, then run `ssh -L 6006:localhost:6006 username@server` to make the tensorboard available from your local machine.
+The tensorboard will be available at http://localhost:6006. If you are running the code on a server, then run `ssh -L 6006:localhost:6006 username@server` to make the tensorboard available from your local machine.
 
 ## Watch it play
 
