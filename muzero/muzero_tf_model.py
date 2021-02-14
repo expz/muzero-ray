@@ -23,10 +23,8 @@ class MuZeroTFModelV2:
                  model_config: Dict[str, Any]):
         self.config = model_config
 
-        #from tensorflow.compat.v1 import ConfigProto
-
-        #config = ConfigProto()
-        #config.gpu_options.allow_growth = True
+        for device in tf.config.list_physical_devices('GPU'):
+            tf.config.experimental.set_memory_growth(device, True)
 
         self.input_shape = obs_space.shape
         obs_input = tf.keras.Input(self.input_shape)
