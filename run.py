@@ -43,7 +43,7 @@ def main(args):
         'action_type': 'atari',
         'num_gpus': 1,
         'num_workers': 4,
-        'num_cpus_per_worker': 2,
+        'num_cpus_per_worker': 1,
         'num_gpus_per_worker': 0.5,
         'memory_per_worker': 6 * 1024**3,  # 6 GiB
         'object_store_memory_per_worker': 3 * 1024**3,  # 3 GiB
@@ -70,7 +70,7 @@ def main(args):
 
     #ray.init(local_mode=True)
     ray.init(
-        num_cpus=11,
+        num_cpus=6,
         num_gpus=3,
         #object_store_memory=20 * 1024**3,
         #_redis_max_memory=5 * 1024**3,
