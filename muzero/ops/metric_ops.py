@@ -1,6 +1,3 @@
-"""
-Code from https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/metric_ops.py
-"""
 import logging
 from typing import Any, List
 import time
@@ -81,6 +78,9 @@ def StandardMetricsReporting(
         >>> metrics_op = StandardMetricsReporting(train_op, workers, config)
         >>> next(metrics_op)
         {"episode_reward_max": ..., "episode_reward_mean": ..., ...}
+
+    Code From:
+        https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/metric_ops.py
     """
 
     output_op = train_op \
@@ -105,6 +105,9 @@ class CollectMetrics:
         >>> output_op = train_op.for_each(CollectMetrics(workers))
         >>> print(next(output_op))
         {"episode_reward_max": ..., "episode_reward_mean": ..., ...}
+
+    Code From:
+        https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/metric_ops.py
     """
 
     def __init__(self,
@@ -171,6 +174,9 @@ class OncePerTimeInterval:
         >>> next(throttled_op)
         >>> print(time.time() - start)
         5.00001  # will be greater than 5 seconds
+
+    Code From:
+        https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/metric_ops.py
     """
 
     def __init__(self, delay):
@@ -198,6 +204,9 @@ class OncePerTimestepsElapsed:
         >>> throttled_op = train_op.filter(OncePerTimestepsElapsed(1000))
         >>> next(throttled_op)
         # will only return after 1000 steps have elapsed
+
+    Code From:
+        https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/metric_ops.py
     """
 
     def __init__(self, delay_steps):
