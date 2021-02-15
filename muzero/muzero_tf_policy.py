@@ -425,8 +425,8 @@ class MuZeroTFPolicy(TFPolicy):
         for v, w in zip(variables, weights):
             v.assign(w)
 
-    def set_global_vars(self, global_vars):
-        # TODO: Update learning rate based on global_vars['timestep']
+    def set_timestep(self, timestep):
+        # TODO: Update learning rate based on timestep
         # Config['lr'] and self._optimizer
         pass
 

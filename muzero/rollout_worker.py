@@ -14,10 +14,12 @@ import time
 from typing import Callable, TypeVar, List
 
 import numpy as np
+import ray
 from ray.util.iter import ParallelIteratorWorker
 
-from muzero.sample_batch import SampleBatch
+from muzero.global_vars import GlobalVars
 from muzero.rollout_metrics import PerfStats, RolloutMetrics
+from muzero.sample_batch import SampleBatch
 from muzero.util import getsize
 
 T = TypeVar("T")
@@ -39,7 +41,8 @@ class RolloutWorker(ParallelIteratorWorker):
             policy_cls,
             config,
             num_workers,
-            worker_index):
+            worker_index,
+            global_vars: GlobalVars):
 
         global _global_worker
         _global_worker = self
@@ -47,12 +50,11 @@ class RolloutWorker(ParallelIteratorWorker):
         self._env_creator = env_creator
         self.policy_cls = policy_cls
         self.config = config
+        self.global_vars = global_vars
+        self.timestep = 0
         self._num_workers = num_workers
         self._worker_index = worker_index
-        self.global_vars: dict = {}
-
-        self._n = -1
-        self._m = -1
+        #self.global_vars: dict = {'timestep': 0}
 
         def rollout():
             while True:
@@ -86,12 +88,10 @@ class RolloutWorker(ParallelIteratorWorker):
         return self.policy.learn_on_batch(batch)
 
     def _generate_eps_id(self):
-        self._n += 1
-        return self._n * self._num_workers + self._worker_index
+        return ray.get(self.global_vars.get_and_increment_count.remote('episode'))
 
     def _generate_unroll_id(self):
-        self._m += 1
-        return self._m * self._num_workers + self._worker_index
+        return ray.get(self.global_vars.get_and_increment_count.remote('unroll'))
 
     def sample(self):
         N = self.config['replay_batch_size']
@@ -165,14 +165,14 @@ class RolloutWorker(ParallelIteratorWorker):
     def get_weights(self):
         return self.policy.get_weights()
 
-    def set_weights(self, weights, global_vars = None):
+    def set_weights(self, weights, timestep = None):
         self.policy.set_weights(weights)
-        if global_vars:
-            self.set_global_vars(global_vars)
+        if timestep is not None:
+            self.set_timestep(timestep)
 
-    def set_global_vars(self, global_vars):
-        self.global_vars = global_vars
-        self.policy.set_global_vars(global_vars)
+    def set_timestep(self, timestep):
+        self.timestep = timestep
+        self.policy.set_timestep(timestep)
 
     def mem_stats(self):
         #rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
@@ -188,6 +188,9 @@ class RolloutWorker(ParallelIteratorWorker):
             'policy_size_mib': round(getsize(self.policy) / 1024.0 / 1024.0, 2),
             'worker_size_mib': round(getsize(self) / 1024.0 / 1024.0, 2)
         }
+
+    def shutdown(self):
+        ray.actor.exit_actor()
 
     def get_metrics(self):
         stats = {

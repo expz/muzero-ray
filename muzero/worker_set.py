@@ -3,6 +3,7 @@ from typing import Any, TypeVar, Callable, List, Union
 import gym
 import ray
 
+from muzero.global_vars import GlobalVars
 from muzero.policy import Policy
 from muzero.rollout_worker import RolloutWorker
 
@@ -21,6 +22,7 @@ class WorkerSet:
                  env_creator: Callable[[Any], EnvType],
                  policy: Policy,
                  trainer_config: TrainerConfigDict,
+                 global_vars: GlobalVars,
                  num_workers: int = 0,
                  logdir: str = None):
         """Create a new WorkerSet and initialize its workers.
@@ -38,24 +40,25 @@ class WorkerSet:
         self._env_creator = env_creator
         self._policy = policy
         self._config = trainer_config
+        self._global_vars = global_vars
         self._logdir = logdir
 
         # Always create a local worker
         self._local_worker = RolloutWorker(
-            env_creator, policy, self._config, 1, 0)
+            env_creator, policy, self._config, 1, 0, global_vars)
 
         # Create a number of remote workers
         self._remote_workers = []
         self._num_workers = 0
         self.add_workers(num_workers)
 
-    def local_worker(self):
+    def local_worker(self) -> RolloutWorker:
         return self._local_worker
 
-    def remote_workers(self):
+    def remote_workers(self) -> List[RolloutWorker]:
         return self._remote_workers
 
-    def sync_weights(self):
+    def sync_weights(self) -> None:
         """Syncs weights of remote workers with the local worker."""
         if self.remote_workers():
             weights = ray.put(self.local_worker().get_weights())
@@ -89,7 +92,17 @@ class WorkerSet:
                 self._policy,
                 self._config,
                 self._num_workers + num_workers,
-                self._num_workers + i + 1)
+                self._num_workers + i + 1,
+                self._global_vars)
             for i in range(num_workers)
         ])
         self._num_workers += num_workers
+
+    def remove_workers(self, num_workers: int) -> None:
+        while num_workers > 0:
+            if not self._remote_workers:
+                break
+            worker = self._remote_workers.pop()
+            worker.shutdown.remote()
+            self._num_workers -= 1
+            num_workers -= 1

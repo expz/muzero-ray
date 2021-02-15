@@ -20,10 +20,12 @@ from ray.tune.result import DEFAULT_RESULTS_DIR
 from ray.util.iter import LocalIterator
 import tensorflow as tf
 
+from muzero.global_vars import GlobalVars
 from muzero.learner_thread import LearnerThread
 from muzero.muzero import ATARI_DEFAULT_CONFIG, BOARD_DEFAULT_CONFIG
+from muzero.muzero_tf_policy import MuZeroTFPolicy
 from muzero.ops.concurrency_ops import Concurrently, Enqueue, Dequeue
-from muzero.ops.metric_ops import StandardMetricsReporting, RecordWorkerStats
+from muzero.ops.metric_ops import StandardMetricsReporting
 from muzero.ops.replay_ops import Replay, StoreToReplayBuffer, CalculatePriorities
 from muzero.ops.rollout_ops import ParallelRollouts
 from muzero.policy import STEPS_SAMPLED_COUNTER, STEPS_TRAINED_COUNTER
@@ -39,7 +41,12 @@ class BroadcastUpdateLearnerWeights:
     """
     Adapted from https://github.com/ray-project/ray/blob/5acd3e66ddc1d7a1af6590567fcc3df95169d8a2/rllib/agents/impala/impala.py#L177
     """
-    def __init__(self, learner_thread, workers, broadcast_interval):
+    def __init__(
+        self,
+        learner_thread: LearnerThread,
+        workers: WorkerSet,
+        broadcast_interval: int):
+
         self.learner_thread = learner_thread
         self.steps_since_broadcast = collections.defaultdict(int)
         self.broadcast_interval = broadcast_interval
@@ -48,7 +55,7 @@ class BroadcastUpdateLearnerWeights:
 
     def __call__(self, item):
         actor, batch = item
-        global_vars = {"timestep": LocalIterator.get_metrics().counters[STEPS_SAMPLED_COUNTER]}
+        timestep = LocalIterator.get_metrics().counters[STEPS_SAMPLED_COUNTER]
         self.steps_since_broadcast[actor] += 1
         if self.steps_since_broadcast[actor] >= self.broadcast_interval:
             if self.learner_thread.weights_updated:
@@ -58,9 +65,9 @@ class BroadcastUpdateLearnerWeights:
             # Update metrics.
             metrics = LocalIterator.get_metrics()
             metrics.counters["num_weight_broadcasts"] += 1
-            actor.set_weights.remote(self.weights, global_vars)
+            actor.set_weights.remote(self.weights, timestep)
         # Also update global vars of the local worker.
-        self.workers.local_worker().set_global_vars(global_vars)
+        self.workers.local_worker().set_timestep(timestep)
 
 
 class MuZeroTrainer(Trainable):
@@ -73,6 +80,14 @@ class MuZeroTrainer(Trainable):
         """
         self._env_id = env or config['env']
         self._name = 'MuZeroTrainer'
+        self._last_mem_reset = 0
+        self._global_vars = GlobalVars.remote()
+
+        self.learner_thread = None
+        self.replay_actors = None
+        self.store_op = None
+        self.replay_op = None
+        self.update_op = None
 
         tf.get_logger().setLevel(config['log_level'])
 
@@ -131,7 +146,7 @@ class MuZeroTrainer(Trainable):
         # There's no way to control where the ReplayActors are located in a multi-node setup, so
         # this function spins up more and more actors until it finds enough
         # which are on the local host.
-        replay_actors = create_colocated(ReplayActor, [
+        self.replay_actors = create_colocated(ReplayActor, [
             tensor_spec,
             num_replay_buffer_shards,
             self.config["learning_starts"],
@@ -145,36 +160,34 @@ class MuZeroTrainer(Trainable):
         ], num_replay_buffer_shards)
         
         # Start the learner thread on the local host (where the ReplayActors are located).
-        learner_thread = LearnerThread(
-            workers.local_worker())
-            #minibatch_buffer_size = config['minibatch_buffer_size'],
-            #num_sgd_iter=config["num_sgd_iter"],
-            #learner_queue_size=config["learner_queue_size"],
-            #learner_queue_timeout=config["learner_queue_timeout"])
-        learner_thread.start()
-
-        # Update experience priorities post learning.
-        def update_prio_and_stats(item: Tuple[ActorHandle, dict, int]) -> None:
-            actor, prio_dict, count = item
-            #print('actor', type(actor), actor)
-            #print('prio_dict:', type(prio_dict), prio_dict)
-            #print('count:', type(count), count)
-            actor.update_priorities.remote(prio_dict)
-            metrics = LocalIterator.get_metrics()
-            # Manually update the steps trained counter since the learner thread
-            # is executing outside the pipeline.
-            metrics.counters[STEPS_TRAINED_COUNTER] += count
-            metrics.timers["learner_dequeue"] = learner_thread.queue_timer
-            metrics.timers["learner_grad"] = learner_thread.grad_timer
-            metrics.timers["learner_overall"] = learner_thread.overall_timer
-            return metrics
+        self.learner_thread = LearnerThread(workers.local_worker())
+        self.learner_thread.start()
         
         # We execute the following steps concurrently:
         # (1) Generate rollouts and store them in our replay buffer actors. Update
         # the weights of the worker that generated the batch.
+        self.store_op = self._build_store_op(workers, self.replay_actors, self.learner_thread)
+
+        # (2) Read experiences from the replay buffer actors and send to the
+        # learner thread via its in-queue.
+        self.replay_op = self._build_replay_op(self.replay_actors, self.learner_thread)
+
+        # (3) Get priorities back from learner thread and apply them to the
+        # replay buffer actors.
+        self.update_op = self._build_update_op(self.learner_thread)
+        
+        return self._build_merged_op(
+            self.store_op,
+            self.replay_op,
+            self.update_op,
+            workers,
+            self.replay_actors,
+            self.learner_thread)
+
+    def _build_store_op(self, workers, replay_actors, learner_thread):
         rollouts = ParallelRollouts(
             workers,
-            mode="async",
+            mode='async',
             num_async=self.config['max_sample_requests_in_flight_per_worker'])
         store_op = rollouts.for_each(CalculatePriorities(self.config['n_step'], self.config['gamma'])) \
             .for_each(StoreToReplayBuffer(actors=replay_actors))
@@ -184,21 +197,33 @@ class MuZeroTrainer(Trainable):
                 .for_each(BroadcastUpdateLearnerWeights(
                     learner_thread,
                     workers,
-                    broadcast_interval=self.config["broadcast_interval"]))
+                    broadcast_interval=self.config['broadcast_interval']))
 
-        # (2) Read experiences from the replay buffer actors and send to the
-        # learner thread via its in-queue.
-        replay_op = Replay(actors=replay_actors, num_async=4) \
-            .zip_with_source_actor() \
-            .for_each(Enqueue(learner_thread.inqueue))
+        return store_op
 
-            #.filter(WaitUntilTimestepsElapsed(config["learning_starts"])) \
-        # (3) Get priorities back from learner thread and apply them to the
-        # replay buffer actors.
-        update_op = Dequeue(
-            learner_thread.outqueue, check=learner_thread.is_alive) \
+    def _build_replay_op(self, replay_actors, learner_thread):
+        return Replay(actors=replay_actors, num_async=4) \
+                    .zip_with_source_actor() \
+                    .for_each(Enqueue(learner_thread.inqueue))
+
+    def _build_update_op(self, learner_thread):
+        # Update experience priorities post learning.
+        def update_prio_and_stats(item: Tuple[ActorHandle, dict, int]) -> None:
+            actor, prio_dict, count = item
+            actor.update_priorities.remote(prio_dict)
+            metrics = LocalIterator.get_metrics()
+            # Manually update the steps trained counter since the learner thread
+            # is executing outside the pipeline.
+            metrics.counters[STEPS_TRAINED_COUNTER] += count
+            metrics.timers['learner_dequeue'] = learner_thread.queue_timer
+            metrics.timers['learner_grad'] = learner_thread.grad_timer
+            metrics.timers['learner_overall'] = learner_thread.overall_timer
+            return metrics
+
+        return Dequeue(learner_thread.outqueue, check=learner_thread.is_alive) \
             .for_each(update_prio_and_stats)
-        
+
+    def _build_merged_op(self, store_op, replay_op, update_op, workers, replay_actors, learner_thread):
         if self.config["training_intensity"]:
             # Execute (1), (2) with a fixed intensity ratio.
             rr_weights = self._calculate_rr_weights() + ["*"]
@@ -226,42 +251,52 @@ class MuZeroTrainer(Trainable):
         return StandardMetricsReporting(merged_op, workers, self.config) \
             .for_each(add_muzero_metrics)
 
+    def _build_workers(self, global_vars):
+        return WorkerSet(
+            self.env_creator,
+            self._policy,
+            self.config,
+            global_vars,
+            num_workers=self.config['num_workers'],
+            logdir=self.logdir)
+
     def setup(self, config):
-        """
-        Adapted from https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/agents/trainer.py
-        """
         self.config = config
 
         env = self._env_id
-        if env:
+        if env is not None:
             config["env"] = env
-            # An already registered env.
             if _global_registry.contains(ENV_CREATOR, env):
                 self.env_creator = _global_registry.get(ENV_CREATOR, env)
-            # Try gym.
             else:
-                import gym  # soft dependency
+                import gym
                 self.env_creator = lambda env_config: gym.make(env)
         else:
             raise Exception('self._env_id should not be None.')
 
-        if config['framework'] == 'tf' or config['framework'] == 'tfe':
-            from muzero.muzero_tf_policy import MuZeroTFPolicy
-            self._policy = MuZeroTFPolicy
-        else:
-            raise NotImplementedError(
-                f'Framework "{config["framework"]} not supported')
+        self._policy = MuZeroTFPolicy
 
-        self.workers = WorkerSet(
-            self.env_creator,
-            self._policy,
-            self.config,
-            num_workers=self.config['num_workers'],
-            logdir=self.logdir)
+        self.workers = self._build_workers(self._global_vars)
 
         self._global_op = self._build_global_op(self.workers)
 
     def step(self):
+        ts = self.workers.local_worker().timestep
+        interval = self.config['memory_reset_interval']
+        if interval > 0 and (ts - self._last_mem_reset) >= interval:
+            # Reset memory by killing workers and respawning.
+            self._last_mem_reset = ts
+            self.workers.remove_workers(self.config['num_workers'])
+            self.workers.add_workers(self.config['num_workers'])
+            self.store_op = self._build_store_op(self.workers, self.replay_actors, self.learner_thread)
+            self._global_op = self._build_merged_op(
+                self.store_op,
+                self.replay_op,
+                self.update_op,
+                self.workers,
+                self.replay_actors,
+                self.learner_thread)
+
         return next(self._global_op)
 
     def cleanup(self):
@@ -306,7 +341,6 @@ class MuZeroTrainer(Trainable):
             cls, config: dict) -> Resources:
         cf = dict(cls._default_config(config.get('action_type', None)), **config)
         num_workers = cf["num_workers"]
-        # TODO(ekl): add custom resources here once tune supports them
         return Resources(
             cpu=cf["num_cpus_for_driver"],
             gpu=cf["num_gpus"],

@@ -169,6 +169,8 @@ ATARI_DEFAULT_CONFIG = config({
     'training_intensity': None,
     # If you set a training_intensity, then this must be 0.
     'learning_starts': 512,
+    # Shutdown and respawn workers after this many timesteps. Set to 0 to disable.
+    'memory_reset_interval': 10000,
     # Deprecated. Set to batch size.
     'rollout_fragment_length': 48,
     'minibatch_buffer_size': 1,
