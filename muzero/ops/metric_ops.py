@@ -5,9 +5,10 @@ import time
 import ray
 from ray.util.iter import LocalIterator
 
+from muzero.global_vars import GlobalVars
+from muzero.metrics import collect_episodes, summarize_episodes
 from muzero.policy import STEPS_SAMPLED_COUNTER
 from muzero.worker_set import WorkerSet
-from muzero.metrics import collect_episodes, summarize_episodes
 
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ def StandardMetricsReporting(
         train_op: LocalIterator[Any],
         workers: WorkerSet,
         config: dict,
+        global_vars: GlobalVars,
         selected_workers: List["ActorHandle"] = None) -> LocalIterator[dict]:
     """Operator to periodically collect and report metrics.
 
@@ -82,12 +84,12 @@ def StandardMetricsReporting(
     Code From:
         https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/metric_ops.py
     """
-
     output_op = train_op \
         .filter(OncePerTimestepsElapsed(config["timesteps_per_iteration"])) \
         .filter(OncePerTimeInterval(config["min_iter_time_s"])) \
         .for_each(CollectMetrics(
-            workers, min_history=config["metrics_smoothing_episodes"],
+            workers, global_vars,
+            min_history=config["metrics_smoothing_episodes"],
             timeout_seconds=config["collect_metrics_timeout"],
             selected_workers=selected_workers))
     return output_op
@@ -111,11 +113,13 @@ class CollectMetrics:
     """
 
     def __init__(self,
-                 workers,
-                 min_history=100,
-                 timeout_seconds=180,
+                 workers: WorkerSet,
+                 global_vars: GlobalVars,
+                 min_history: int = 100,
+                 timeout_seconds: float = 180,
                  selected_workers: List["ActorHandle"] = None):
         self.workers = workers
+        self.global_vars = global_vars
         self.episode_history = []
         self.to_be_collected = []
         self.min_history = min_history
@@ -140,6 +144,8 @@ class CollectMetrics:
 
         # Add in iterator metrics.
         metrics = LocalIterator.get_metrics()
+        metrics.counters[STEPS_SAMPLED_COUNTER] = ray.get(self.global_vars.get_count.remote('timestep'))
+
         timers = {}
         counters = {}
         info = {}

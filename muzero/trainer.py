@@ -187,6 +187,7 @@ class MuZeroTrainer(Trainable):
     def _build_store_op(self, workers, replay_actors, learner_thread):
         rollouts = ParallelRollouts(
             workers,
+            self._global_vars,
             mode='async',
             num_async=self.config['max_sample_requests_in_flight_per_worker'])
         store_op = rollouts.for_each(CalculatePriorities(self.config['n_step'], self.config['gamma'])) \
@@ -248,7 +249,7 @@ class MuZeroTrainer(Trainable):
             })
             return result
 
-        return StandardMetricsReporting(merged_op, workers, self.config) \
+        return StandardMetricsReporting(merged_op, workers, self.config, self._global_vars) \
             .for_each(add_muzero_metrics)
 
     def _build_workers(self, global_vars):

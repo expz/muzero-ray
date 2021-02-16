@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 from typing import List, Tuple, Any
 
+import ray
 from ray.util.iter import from_actors, LocalIterator
 from ray.util.iter_metrics import SharedMetrics
 
+from muzero.global_vars import GlobalVars
 from muzero.policy import STEPS_SAMPLED_COUNTER
 from muzero.sample_batch import SampleBatch
 from muzero.worker_set import WorkerSet
@@ -29,8 +31,11 @@ def standardized(array):
     return (array - array.mean()) / max(1e-4, array.std())
 
 
-def ParallelRollouts(workers: WorkerSet, *, mode="bulk_sync",
-                     num_async=1) -> LocalIterator[SampleBatch]:
+def ParallelRollouts(workers: WorkerSet,
+                     global_vars: GlobalVars,
+                     *,
+                     mode: str = "bulk_sync",
+                     num_async: int = 1) -> LocalIterator[SampleBatch]:
     """Operator to collect experiences in parallel from rollout workers.
 
     If there are no remote workers, experiences will be collected serially from
@@ -73,6 +78,7 @@ def ParallelRollouts(workers: WorkerSet, *, mode="bulk_sync",
     workers.sync_weights()
 
     def report_timesteps(batch):
+        ray.get(global_vars.add.remote('timestep', batch.count))
         metrics = LocalIterator.get_metrics()
         metrics.counters[STEPS_SAMPLED_COUNTER] += batch.count
         return batch
