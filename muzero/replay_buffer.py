@@ -500,7 +500,8 @@ class LocalReplayBuffer(ParallelIteratorWorker):
                  prioritized_replay_beta=0.4,
                  prioritized_replay_eps=1e-6,
                  replay_mode="independent",
-                 replay_sequence_length=1):
+                 replay_sequence_length=1,
+                 frames_per_obs=32):
         self.replay_starts = learning_starts // num_shards
         self.buffer_size = buffer_size // num_shards
         self.replay_batch_size = replay_batch_size
@@ -533,7 +534,8 @@ class LocalReplayBuffer(ParallelIteratorWorker):
                 self.buffer_size,
                 array_spec,
                 alpha=prioritized_replay_alpha,
-                beta=prioritized_replay_beta)
+                beta=prioritized_replay_beta,
+                frames_per_obs=frames_per_obs)
 
         self.replay_buffers = collections.defaultdict(new_buffer)
 

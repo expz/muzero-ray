@@ -21,6 +21,9 @@ DEFAULT_CONFIG = {
     'min_iter_time_s': 0,
     'metrics_smoothing_episodes': 20,
     'collect_metrics_timeout': 180,
+    # More than one env per worker is not currently supported.
+    # It would require updating the postprocessing function.
+    'envs_per_worker': 1,
 }
 
 
@@ -31,7 +34,6 @@ def config(conf: dict) -> dict:
 
 
 BOARD_DEFAULT_CONFIG = config({
-    'framework': 'tfe',
     'conv_filters': {
         'representation': [
             (1, 'conv', 256, (3, 3), (1, 1)),
@@ -97,7 +99,6 @@ BOARD_DEFAULT_CONFIG = config({
 })
 
 ATARI_DEFAULT_CONFIG = config({
-    'framework': 'tfe',
     'conv_filters': {
         'representation': [
             (1, 'conv', 128, (3, 3), (2, 2)),
@@ -128,7 +129,6 @@ ATARI_DEFAULT_CONFIG = config({
         ],
     },
     'action_type': 'atari',
-    'envs_per_worker': 1,
     'preprocessor_pref': 'none',  # Prevent deepmind preprocessor from running
     'value_type': 'categorical',
     'value_max': 300,
@@ -137,6 +137,7 @@ ATARI_DEFAULT_CONFIG = config({
     'policy_type': 'fc',
     'input_steps': 32,  # Number of frames per input
     'n_channels': 4,  # Number of channels per frame
+    'frame_shape': (96, 96),
     'loss_steps': 5,
     # The paper used 10, and 5 for the reanalyze version
     'n_step': 6,
@@ -189,6 +190,100 @@ ATARI_DEFAULT_CONFIG = config({
         'dirichlet_alpha': 0.25,
         # The paper used 50, but showed that it could work with as little as 7
         'num_simulations': 20,
+        'argmax_tree_policy': False,
+        'puct_c1': 1.25,
+        'puct_c2': 19652,
+    },
+    'optimizer': {
+        'num_replay_buffer_shards': 1,
+        'debug': False,
+    },
+})
+
+CARTPOLE_DEFAULT_CONFIG = config({
+    'conv_filters': {
+        'representation': [
+            (2, 'fc', 64, None, None),
+        ],
+        'dynamics': [
+            (3, 'fc', 64, None, None),
+        ],
+        'reward': [
+            (1, 'fc', 32, None, None),
+        ],
+        'prediction': [
+        ],
+        'value': [
+            (1, 'fc', 32, None, None),
+        ],
+        'policy': [
+            (1, 'fc', 32, None, None),
+        ],
+    },
+    'action_type': 'atari',
+    'preprocessor_pref': 'none',  # Prevent deepmind preprocessor from running
+    'value_type': 'categorical',
+    'value_max': 200,
+    'reward_type': 'categorical',
+    'reward_max': 3,
+    'policy_type': 'fc',
+    # Number of frames per model input
+    'input_steps': 16,
+    # Number of channels per frame
+    'n_channels': 2,
+    'frame_shape': (4,),
+    'loss_steps': 5,
+    # The paper used 10, and 5 for the reanalyze version
+    'n_step': 5,
+    # The paper used 0.05 with batch size 1024
+    'lr': 0.002,
+    'lr_schedule': None,
+    # The paper used 0.9 with batch size 1024
+    'momentum': 0.9,
+    # The paper used 1e-4 with batch size 1024
+    # 'l2_reg': 4e-5,
+    'l2_reg': 4e-6,
+    'gamma': 0.997,
+    # Apply invertible transform of value and reward model outputs.
+    # The paper does this, but it is unclear whether I correctly implemented
+    # it, so leave it off.
+    'transform_outputs': False,
+    # The epsilon used in the formula for the invertible transform of model outputs.
+    'scaling_epsilon': 0.001,
+    'grad_clip': 40.0,
+    'value_loss_weight': 0.25,  # See Reanalyze appendix
+    # The number of frames to generate before returning
+    'replay_batch_size': 64,
+    # The paper uses batch size of 1024
+    'train_batch_size': 64,
+    # The max number of observations the replay buffer can store.
+    'buffer_size': 100000,
+    # If set, this will fix the ratio of replayed from a buffer and learned
+    # on timesteps to sampled from an environment and stored in the replay
+    # buffer timesteps. Otherwise, replay will proceed as fast as possible.
+    'training_intensity': None,
+    # If you set a training_intensity, then this must be 0.
+    'learning_starts': 256,
+    # Shutdown and respawn workers after this many timesteps. Set to 0 to disable.
+    'memory_reset_interval': 0,
+    # Deprecated. Set to batch size.
+    'rollout_fragment_length': 64,
+    'minibatch_buffer_size': 1,
+    'num_sgd_iter': 1,
+    'learner_queue_size': 16,
+    'learner_queue_timeout': 60,
+    'broadcast_interval': 1,
+    'max_sample_requests_in_flight_per_worker': 2,
+    'prioritized_replay_alpha': 1,
+    'prioritized_replay_beta': 1,
+    'prioritized_replay_eps': 1e-6,
+    'mcts': {
+        'reset_q_bounds_per_node': True,
+        'add_dirichlet_noise': True,
+        'dirichlet_epsilon': 0.25,
+        'dirichlet_alpha': 0.25,
+        # The paper used 50, but showed that it could work with as little as 7
+        'num_simulations': 50,
         'argmax_tree_policy': False,
         'puct_c1': 1.25,
         'puct_c2': 19652,

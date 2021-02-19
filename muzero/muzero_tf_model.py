@@ -151,7 +151,7 @@ class MuZeroTFModelV2:
     def _encode_atari_actions(self, actions: TensorType) -> TensorType:
         """Create one frame per action and encode using one hot"""
         channel_shape = self.state_shape[:-1].as_list()
-        actions = tf.reshape(actions, tf.concat([tf.shape(actions), tf.convert_to_tensor([1] * len(channel_shape))], 0))
+        actions = tf.reshape(actions, tf.concat([tf.shape(actions), tf.convert_to_tensor([1] * len(channel_shape), dtype=tf.int32)], 0))
         tile = tf.tile(actions, tf.constant([1] + channel_shape))
         one_hot = tf.one_hot(tile, self.action_space_size)
         return one_hot

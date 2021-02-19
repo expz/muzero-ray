@@ -152,23 +152,15 @@ class ResizeFrame(gym.ObservationWrapper):
 
 class FrameStackWithAction(gym.Wrapper):
     def __init__(self, env, k):
-        gym.Wrapper.__init__(self, env)
-        self.k = k
-        self.action_count = env.action_space.n
-        self.frames = deque([], maxlen=k)
-        shp = env.observation_space.shape
-        self.frame_shape = (shp[0], shp[1], 1)
-        self.observation_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(shp[0], shp[1], (shp[2] + 1) * k),
-            dtype=env.observation_space.dtype)
+        raise NotImplementedError('FrameStackWithAction is an abstract base class')
     
     def _add_action(self, ob, action):
         """Add frame with constant value representing action. Notice the plus one."""
         action_frame = np.empty(self.frame_shape)
         action_frame.fill((action + 1) / self.action_count)
-        return np.concatenate((ob, action_frame), axis=2)
+        if len(ob.shape) < len(action_frame.shape):
+            ob = np.expand_dims(ob, axis=-1)
+        return np.concatenate((ob, action_frame), axis=-1)
     
     def reset(self):
         ob = self.env.reset()
@@ -185,7 +177,49 @@ class FrameStackWithAction(gym.Wrapper):
     
     def _get_ob(self):
         assert len(self.frames) == self.k
-        return np.concatenate(self.frames, axis=2)
+        return np.concatenate(self.frames, axis=-1)
+    
+class FrameStackWithAction2D(FrameStackWithAction):
+    def __init__(self, env, k):
+        gym.Wrapper.__init__(self, env)
+        self.k = k
+        self.action_count = env.action_space.n
+        self.frames = deque([], maxlen=k)
+        shp = env.observation_space.shape
+        shp = shp + (1,) if len(shp) == 2 else shp
+        self.frame_shape = (shp[0], shp[1], 1)
+        low = env.observation_space.low
+        high = env.observation_space.high
+        if not np.isscalar(low):
+            low = np.min(low)
+        if not np.isscalar(high):
+            high = np.max(high)
+        self.observation_space = gym.spaces.Box(
+            low=low,
+            high=high,
+            shape=(shp[0], shp[1], (shp[2] + 1) * k),
+            dtype=env.observation_space.dtype)
+
+class FrameStackWithAction1D(FrameStackWithAction):
+    def __init__(self, env, k, low=0, high=255):
+        gym.Wrapper.__init__(self, env)
+        self.k = k
+        self.action_count = env.action_space.n
+        self.frames = deque([], maxlen=k)
+        shp = env.observation_space.shape
+        shp = shp + (1,) if len(shp) == 1 else shp
+        self.frame_shape = (shp[0], 1)
+        low = env.observation_space.low
+        high = env.observation_space.high
+        if not np.isscalar(low):
+            low = np.min(low)
+        if not np.isscalar(high):
+            high = np.max(high)
+        self.observation_space = gym.spaces.Box(
+            low=low,
+            high=high,
+            shape=(shp[0], (shp[1] + 1) * k),
+            dtype=env.observation_space.dtype)
     
 def wrap_muzero(env, dim=96, framestack=32):
     # This wrapper will be added in the RolloutWorker constructor.
@@ -197,8 +231,15 @@ def wrap_muzero(env, dim=96, framestack=32):
     if 'FIRE' in env.unwrapped.get_action_meanings():
         env = FireResetEnv(env)
     env = ResizeFrame(env, dim)
-    env = FrameStackWithAction(env, framestack)
+    env = FrameStackWithAction2D(env, framestack)
     return env
 
-def register_muzero_env(env_name: str, muzero_env_name: str):
-    tune.register_env(muzero_env_name, lambda ctx: wrap_muzero(gym.make(env_name)))
+def wrap_cartpole(env, framestack=16):
+    env = FrameStackWithAction1D(env, framestack, low=env.observation_space.low)
+    return env
+
+def register_atari_env(env_name: str, muzero_env_name: str, framestack=32):
+    tune.register_env(muzero_env_name, lambda ctx: wrap_muzero(gym.make(env_name), framestack=framestack))
+
+def register_cartpole_env(env_name: str, muzero_env_name: str, framestack=16):
+    tune.register_env(muzero_env_name, lambda ctx: wrap_cartpole(gym.make(env_name), framestack=framestack))

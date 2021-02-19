@@ -126,10 +126,11 @@ class MuZeroTrainer(Trainable):
         num_replay_buffer_shards = self.config["optimizer"]["num_replay_buffer_shards"]
 
         n_channels = self.config['n_channels']
+        frame_shape = self.config['frame_shape']
         loss_steps = self.config['loss_steps']
         action_count = self.env_creator({}).action_space.n
         tensor_spec = (
-            ArraySpec((96, 96, n_channels), np.float32, SampleBatch.CUR_OBS),
+            ArraySpec(frame_shape + (n_channels,), np.float32, SampleBatch.CUR_OBS),
             ArraySpec((1,), np.int32, SampleBatch.EPS_ID),
             ArraySpec((1,), np.int32, SampleBatch.UNROLL_ID),
             ArraySpec((loss_steps,), np.int32, SampleBatch.ACTIONS),
@@ -156,7 +157,8 @@ class MuZeroTrainer(Trainable):
             self.config["prioritized_replay_beta"],
             self.config["prioritized_replay_eps"],
             self.config["multiagent"]["replay_mode"],
-            1,  # replay_sequence_length
+            1,  # replay_sequence_length,
+            self.config['input_steps'],
         ], num_replay_buffer_shards)
         
         # Start the learner thread on the local host (where the ReplayActors are located).

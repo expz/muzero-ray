@@ -5,7 +5,7 @@ Train a MuZero model.
 
 # Set tensorflow log level to ERROR.
 import os
-os.putenv('TF_CPP_MIN_LOG_LEVEL', '2')
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import argparse
 import coloredlogs
@@ -17,8 +17,8 @@ import tensorflow as tf
 
 tf.get_logger().setLevel('ERROR')
 
-from muzero.env import register_muzero_env
-from muzero.muzero import ATARI_DEFAULT_CONFIG
+from muzero.env import register_atari_env, register_cartpole_env
+from muzero.muzero import ATARI_DEFAULT_CONFIG, CARTPOLE_DEFAULT_CONFIG
 from muzero.trainer import MuZeroTrainer
 
 
@@ -38,28 +38,46 @@ def update_config(old_config, new_config):
 def main(args):
     coloredlogs.install(level=args.loglevel.upper())
 
-    config = {
-        'env': 'BreakoutNoFrameskip-MuZero-v1',
-        'action_type': 'atari',
-        'num_gpus': 1,
-        'num_workers': 4,
-        'num_cpus_per_worker': 1,
-        'num_gpus_per_worker': 0.5,
-        'memory_per_worker': 6 * 1024**3,  # 6 GiB
-        'object_store_memory_per_worker': 3 * 1024**3,  # 3 GiB
-        'log_level': args.loglevel.upper(),
-        'learning_starts': 256,
-        'timesteps_per_iteration': 512,
-        'buffer_size': 100000,
-        'optimizer': {
-            'num_replay_buffer_shards': 1,
-            'debug': False,
-        },
-    }
-    config = update_config(ATARI_DEFAULT_CONFIG, config)
-
     if args.game == 'breakout':
-        register_muzero_env('BreakoutNoFrameskip-v4', 'BreakoutNoFrameskip-MuZero-v1')
+        config = {
+            'env': 'BreakoutNoFrameskip-MuZero-v1',
+            'num_gpus': 1,
+            'num_workers': 4,
+            'num_cpus_per_worker': 1,
+            'num_gpus_per_worker': 0.5,
+            'memory_per_worker': 6 * 1024**3,  # 6 GiB
+            'object_store_memory_per_worker': 3 * 1024**3,  # 3 GiB
+            'log_level': args.loglevel.upper(),
+            'learning_starts': 512,
+            'timesteps_per_iteration': 512,
+            'buffer_size': 100000,
+            'optimizer': {
+                'num_replay_buffer_shards': 1,
+                'debug': False,
+            },
+        }
+        config = update_config(ATARI_DEFAULT_CONFIG, config)
+        register_atari_env('BreakoutNoFrameskip-v4', 'BreakoutNoFrameskip-MuZero-v1', framestack=config['input_steps'])
+    elif args.game == 'cartpole':
+        config = {
+            'env': 'CartPole-MuZero-v0',
+            'num_gpus': 1,
+            'num_workers': 4,
+            'num_cpus_per_worker': 1,
+            'num_gpus_per_worker': 0.5,
+            'memory_per_worker': 6 * 1024**3,  # 6 GiB
+            'object_store_memory_per_worker': 3 * 1024**3,  # 3 GiB
+            'log_level': args.loglevel.upper(),
+            'learning_starts': 256,
+            'timesteps_per_iteration': 512,
+            'buffer_size': 100000,
+            'optimizer': {
+                'num_replay_buffer_shards': 1,
+                'debug': False,
+            },
+        }
+        config = update_config(CARTPOLE_DEFAULT_CONFIG, config)
+        register_cartpole_env('CartPole-v0', 'CartPole-MuZero-v0', framestack=config['input_steps'])
 
     checkpoint_freq = args.checkpoint_steps // config['timesteps_per_iteration']
 
@@ -107,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument(
         'game',
         type=str,
-        choices=['breakout'],
+        choices=['breakout', 'cartpole'],
         help='the game to learn'
     )
     parser.add_argument(
