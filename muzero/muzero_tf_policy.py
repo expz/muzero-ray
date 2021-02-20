@@ -251,7 +251,7 @@ class MuZeroTFPolicy(TFPolicy):
         return actions.numpy(), [], batch
 
     def compute_action(self, obs, greedy=False, mcts=True):
-        value, action_probs = self.model.forward_with_value(tf.expand_dims(obs, 0), is_training=not mcts)
+        value, action_probs = self.model.forward(tf.expand_dims(obs, 0), is_training=not mcts)
 
         action_probs = tf.convert_to_tensor(action_probs)
         if greedy:
@@ -261,7 +261,7 @@ class MuZeroTFPolicy(TFPolicy):
             return tf.squeeze(action_dist.sample(1)).numpy()
 
     def get_actions(self, obs_batch: TensorType, is_training: bool):
-        value, action_probs = self.model.forward_with_value(obs_batch, is_training=is_training)
+        value, action_probs = self.model.forward(obs_batch, is_training=is_training)
 
         if not is_training and self.model.config['transform_outputs']:
             value = self.model.transform(value)
@@ -377,8 +377,20 @@ class MuZeroTFPolicy(TFPolicy):
         grads = tape.gradient(self.loss_obj.loss, variables)
         grads = self.clip_gradients(grads)
 
-        stats = self._stats()
+        assert len(variables) == len(grads)
         grads_and_vars = list(zip(grads, variables))
+        stats = self._stats()
+        for grad, var in grads_and_vars:
+            if 'dense' in var.name and 'kernel' in var.name:
+                if '_' not in var.name:
+                    i = 0
+                else:
+                    i = int(var.name.split('/')[0].split('_')[1])
+                grad_norm = tf.math.sqrt(tf.math.reduce_sum(grad * grad)).numpy()
+                weight_norm = tf.math.sqrt(tf.math.reduce_sum(var.value() * var.value())).numpy()
+                stats[LEARNER_STATS_KEY][f'dense_{i}_weights'] = weight_norm
+                stats[LEARNER_STATS_KEY][f'dense_{i}_gradient'] = grad_norm
+
         return grads_and_vars, stats
 
     def clip_gradients(self, grads):

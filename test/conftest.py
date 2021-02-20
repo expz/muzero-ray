@@ -4,7 +4,7 @@ import pytest
 from muzero.sample_batch import SampleBatch
 from muzero.structure_list import ArraySpec
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def atari_tensor_spec():
     n_channels = 4
     frame_shape = (96, 96)
@@ -26,17 +26,20 @@ def atari_tensor_spec():
     )
     return tensor_spec
 
+def random_tensor(spec):
+    if spec.dtype == np.float32:
+        return np.random.uniform(size=spec.shape)
+    elif spec.dtype == np.int32:
+        return np.random.randint(0, 1 << 24, size=spec.shape)
+    elif spec.dtype == np.bool:
+        return np.random.choice(a=[False, True], size=spec.shape)
+    else:
+        raise NotImplementedError(f"tensor spec dtype {spec.dtype} not supported")
+
 def random_struct(tensor_spec):
     struct = []
     for spec in tensor_spec:
-        if spec.dtype == np.float32:
-            struct.append(np.random.uniform(size=spec.shape))
-        elif spec.dtype == np.int32:
-            struct.append(np.random.randint(0, 1 << 24, size=spec.shape))
-        elif spec.dtype == np.bool:
-            struct.append(np.random.choice(a=[False, True], size=spec.shape))
-        else:
-            raise NotImplementedError(f"tensor spec dtype {spec.dtype} not supported")
+        struct.append(random_tensor(spec))
     return tuple(struct)
 
 def random_batch(tensor_spec, batch_size):
@@ -69,3 +72,12 @@ def random_sample_batch(tensor_spec, batch_size):
         step_ids.append(batch_size // 2)
     batch['t'] = np.array(step_ids)
     return SampleBatch(**batch)
+
+def random_obs(tensor_spec, batch_size, frames_per_obs):
+    batch = []
+    for _ in range(batch_size):
+        obs = []
+        for _ in range(frames_per_obs):
+            obs.append(random_tensor(tensor_spec))
+        batch.append(np.expand_dims(np.concatenate(obs, axis=-1), axis=0))
+    return np.concatenate(batch, axis=0)

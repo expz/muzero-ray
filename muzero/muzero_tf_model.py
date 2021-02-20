@@ -86,6 +86,10 @@ class MuZeroTFModelV2:
         
         self.mcts = MCTS(self, model_config)
 
+        #self.representation_net.summary()
+        #self.dynamics_net.summary()
+        #self.prediction_net.summary()
+
     def variables(self) -> List[tf.Variable]:
         return self.var_list
 
@@ -217,11 +221,11 @@ class MuZeroTFModelV2:
 
     @staticmethod
     def expectation(categorical: TensorType, basis: TensorType) -> TensorType:
-        return tf.tensordot(categorical, basis, axes=[[-1], [0]])
+        return tf.squeeze(tf.tensordot(categorical, basis, axes=[[-1], [0]]), axis=-1)
     
     @staticmethod
     def expectation_np(categorical: np.ndarray, basis: np.ndarray) -> np.ndarray:
-        return np.tensordot(categorical, basis, axes=[[-1], [0]])
+        return np.squeeze(np.tensordot(categorical, basis, axes=[[-1], [0]]), axis=-1)
 
     @staticmethod
     def scalar_to_categorical(t: TensorType, bound: int) -> TensorType:
@@ -264,42 +268,10 @@ class MuZeroTFModelV2:
 
         return tf.scatter_nd(indices_l, left, shape) + tf.scatter_nd(indices_u, right, shape)
 
-    def __call__(self, input_dict: Dict[str, Any], is_training: bool = True) -> Tuple[TensorType, List[Any]]:
-        return self.forward(input_dict, is_training) 
+    def __call__(self, obs, is_training: bool = True) -> Tuple[TensorType, List[Any]]:
+        return self.forward(obs, is_training) 
 
-    def forward(self, input_dict: Dict[str, Any], is_training: bool = True) -> Tuple[TensorType, List[Any]]:
-        """
-        WARNING: This outputs policy as probabilities.
-
-        This is called by the learner thread.
-        
-        Arguments:
-            input_dict (dict): dictionary of input tensors, including "obs",
-                "prev_action", "prev_reward", "is_training"
-            state (list): list of state tensors with sizes matching those
-                returned by get_initial_state + the batch dimension
-            seq_lens (Tensor): 1d tensor holding input sequence lengths
-        Returns:
-            (outputs, state): The model output tensor of size
-                [BATCH, output_spec.size] or a list of tensors corresponding to
-                output_spec.shape_list, and a list of state tensors of
-                [BATCH, state_size_i].
-        """
-        # Observations need to have self.input_steps steps for each batch.
-        # Convert boolean tensor to Python bool
-        if isinstance(is_training, tf.Tensor):
-            is_training = tf.keras.backend.eval(is_training)
-
-        if is_training:
-            # For Atari, obs should be of size (batch_size, screen_x, screen_y, self.input_steps*4).
-            hidden_state = self.representation(input_dict[SampleBatch.CUR_OBS])
-            value, policy = self.prediction(hidden_state)
-            value = self.expectation(value, self.value_basis)
-        else:
-            value, policy, actions = self.mcts.compute_action(input_dict[SampleBatch.CUR_OBS])
-        return policy, value
-
-    def forward_with_value(self, obs: TensorType, is_training: bool = False) -> Tuple[TensorType, TensorType]:
+    def forward(self, obs: TensorType, is_training: bool = False) -> Tuple[TensorType, TensorType]:
         """
         WARNING: This outputs policy as probabilities.
 
