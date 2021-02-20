@@ -284,6 +284,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       array_spec,
       scope,
       'PrioritizedReplayBuffer')
+
+    # Check that the spec has the minimal required fields.
+    names = [spec.name for spec in array_spec]
+    assert SampleBatch.EPS_ID in names
+    assert SampleBatch.CUR_OBS in names
+
     self.alpha = alpha
     self.beta = beta
     self._step_idx = 0
@@ -408,6 +414,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       self._episode_steps[(ep, step)][1]
       for ep, step in episode_steps
     ]
+    steps = [step for ep, step in episode_steps]
     #raise Exception(f"""
     #  print('get by idnex', {self._tree.get_by_index(tree_indices[0])})
     #  print('tree total', {self._tree.total})
@@ -424,7 +431,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     data = { field: [] for field in self._fields }
     for episode, step in episode_steps:
       indices = [
-        self._episode_steps[(episode, s)][0]
+        self._episode_steps[(episode, max(s, 0))][0]
         for s in range(step, step - trajectory_len, -1)
       ]
       item = self._steps.select(indices)
@@ -456,7 +463,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     #print('data_np', [(field, data_np[field].shape) for field in data_np])
     # TODO: This doesn't work if frames are general structures (not tensors)
     sample = SampleBatch(**data_np)
-    sample['batch_indexes'] = batch_indexes
+    sample['batch_indexes'] = np.array(batch_indexes)
+    sample['t'] = np.array(steps)
     sample[PRIO_WEIGHTS] = weights
     self._batches_sampled += 1
     return sample
@@ -468,6 +476,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       if priority < MIN_ALLOWED_PRIORITY:
         priority = MIN_ALLOWED_PRIORITY
       self._tree.update(idx, priority**self.alpha)
+
+  def get_priorities(self, idxes):
+    return [self._tree.get_by_index(idx) for idx in idxes]
 
   def stats(self, debug=False):
     data = {
