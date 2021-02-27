@@ -381,15 +381,19 @@ class MuZeroTFPolicy(TFPolicy):
         grads_and_vars = list(zip(grads, variables))
         stats = self._stats()
         for grad, var in grads_and_vars:
-            if 'dense' in var.name and 'kernel' in var.name:
+            if 'kernel' in var.name:
                 if '_' not in var.name:
                     i = 0
+                    typ = var.name.split('/')[0]
                 else:
                     i = int(var.name.split('/')[0].split('_')[1])
+                    typ = var.name.split('/')[0].split('_')[0]
+                if typ == 'conv2d' and i % 5 != 0:
+                    continue
                 grad_norm = tf.math.sqrt(tf.math.reduce_sum(grad * grad)).numpy()
                 weight_norm = tf.math.sqrt(tf.math.reduce_sum(var.value() * var.value())).numpy()
-                stats[LEARNER_STATS_KEY][f'dense_{i}_weights'] = weight_norm
-                stats[LEARNER_STATS_KEY][f'dense_{i}_gradient'] = grad_norm
+                stats[LEARNER_STATS_KEY][f'{typ}_{i}_weights'] = weight_norm
+                stats[LEARNER_STATS_KEY][f'{typ}_{i}_gradient'] = grad_norm
 
         return grads_and_vars, stats
 
