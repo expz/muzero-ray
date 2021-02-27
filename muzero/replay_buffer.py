@@ -16,7 +16,6 @@ from muzero.structure_list import NPStructureList
 
 PRIO_WEIGHTS = 'weights'
 PRIORITIES = 'priorities'
-MIN_ALLOWED_PRIORITY = 0.1
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +277,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
   def __init__(self, capacity, array_spec,
                scope='prioritized_replay_buffer', alpha=1, beta=1,
-               frames_per_obs=32):
+               frames_per_obs=32, min_allowed_priority=0.001):
     super(PrioritizedReplayBuffer, self).__init__(
       capacity,
       array_spec,
@@ -306,6 +305,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       if field == SampleBatch.CUR_OBS:
         self.channels_per_frame = array_spec[i].shape[-1]
     self.frames_per_obs = frames_per_obs
+    self.min_allowed_priority = min_allowed_priority
 
   def add(self, item: SampleBatch, p: float):
     """
@@ -314,8 +314,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     assert len(item[SampleBatch.EPS_ID]) == 1
     assert len(item['t']) == 1
     # Silently ignore
-    if 0 <= p < MIN_ALLOWED_PRIORITY:
-      p = MIN_ALLOWED_PRIORITY
+    if 0 <= p < self.min_allowed_priority:
+      p = self.min_allowed_priority
     #print('sample keys:', sorted([(field, item[field].shape) for field in item.data]))
     episode, step = item[SampleBatch.EPS_ID][0], item["t"][0]
     if p == -1:
@@ -512,7 +512,8 @@ class LocalReplayBuffer(ParallelIteratorWorker):
                  prioritized_replay_eps=1e-6,
                  replay_mode="independent",
                  replay_sequence_length=1,
-                 frames_per_obs=32):
+                 frames_per_obs=32,
+                 min_allowed_priority=0.001):
         self.replay_starts = learning_starts // num_shards
         self.buffer_size = buffer_size // num_shards
         self.replay_batch_size = replay_batch_size
@@ -521,6 +522,7 @@ class LocalReplayBuffer(ParallelIteratorWorker):
         self.prioritized_replay_eps = prioritized_replay_eps
         self.replay_mode = replay_mode
         self.replay_sequence_length = replay_sequence_length
+        self.min_allowed_priority = min_allowed_priority
 
         if replay_sequence_length > 1:
             self.replay_batch_size = int(
@@ -546,7 +548,8 @@ class LocalReplayBuffer(ParallelIteratorWorker):
                 array_spec,
                 alpha=prioritized_replay_alpha,
                 beta=prioritized_replay_beta,
-                frames_per_obs=frames_per_obs)
+                frames_per_obs=frames_per_obs,
+                min_allowed_priority=min_allowed_priority)
 
         self.replay_buffers = collections.defaultdict(new_buffer)
 

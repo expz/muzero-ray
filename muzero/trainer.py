@@ -159,6 +159,7 @@ class MuZeroTrainer(Trainable):
             self.config["multiagent"]["replay_mode"],
             1,  # replay_sequence_length,
             self.config['input_steps'],
+            self.config['min_allowed_priority'],
         ], num_replay_buffer_shards)
         
         # Start the learner thread on the local host (where the ReplayActors are located).
