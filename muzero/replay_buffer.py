@@ -492,14 +492,13 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     return data
 
 
-# Visible for testing.
-_local_replay_buffer = None
-
-
 class LocalReplayBuffer(ParallelIteratorWorker):
     """A replay buffer shard.
     Ray actors are single-threaded, so for scalability multiple replay actors
-    may be created to increase parallelism."""
+    may be created to increase parallelism.
+
+    Some code taken from https://github.com/ray-project/ray/blob/ray-0.8.7/rllib/execution/replay_buffer.py
+    """
 
     def __init__(self,
                  array_spec,
