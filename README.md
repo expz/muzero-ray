@@ -10,6 +10,13 @@ Unfortunately, while the training will run, the model does not learn. There is a
 make venv
 ```
 
+## Test
+
+To run tests, run this command from the root directory of the repository:
+```
+pytest
+```
+
 ## Run
 
 First, open up `run.py` and edit the ray configuration to have the amount of GPUs, CPUs and memory you would like. It is currently set to run on a 3 GPU machine with 12 cores and 64 GB of RAM.

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import random
 from typing import Any
 
 import gym
 import numpy as np
 import tensorflow as tf
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 from muzero.mcts import MCTS
-from muzero.sample_batch import SampleBatch
+
 
 TensorType = Any
 
@@ -25,6 +26,11 @@ class MuZeroTFModelV2:
 
         for device in tf.config.list_physical_devices('GPU'):
             tf.config.experimental.set_memory_growth(device, True)
+        
+        if 'random_seed' in model_config and model_config['random_seed'] is not None:
+            random.seed(model_config['random_seed'])
+            np.random.seed(model_config['random_seed'])
+            tf.random.set_seed(model_config['random_seed'])
 
         self.input_shape = obs_space.shape
         obs_input = tf.keras.Input(self.input_shape)

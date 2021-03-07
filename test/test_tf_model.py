@@ -4,8 +4,8 @@ import pytest
 import tensorflow as tf
 
 from .conftest import random_obs
-from muzero.env import wrap_muzero
-from muzero.muzero import ATARI_DEFAULT_CONFIG
+from muzero.env import wrap_atari, wrap_cartpole
+from muzero.muzero import ATARI_DEFAULT_CONFIG, CARTPOLE_DEFAULT_CONFIG
 from muzero.muzero_tf_model import MuZeroTFModelV2
 
 @pytest.fixture(scope='module')
@@ -16,7 +16,7 @@ def atari_config():
 
 @pytest.fixture(scope='module')
 def atari_model(atari_config: dict):
-    env = wrap_muzero(gym.make('BreakoutNoFrameskip-v4'))
+    env = wrap_atari(gym.make('BreakoutNoFrameskip-v4'))
     return MuZeroTFModelV2(env.observation_space, env.action_space, atari_config)
 
 def test_scalar_to_categorical(atari_model: MuZeroTFModelV2, atari_config: dict):
@@ -64,3 +64,41 @@ def test_forward(atari_tensor_spec, atari_model: MuZeroTFModelV2):
     value, policy = atari_model.forward(t, is_training=False)
     assert value.shape == (batch_size,)
     assert policy.shape == (batch_size, atari_model.action_space_size)
+
+def test_model_reproducibility():
+    random_seed = 1
+    action = 0
+
+    def one_run(env: gym.Env):
+        env.seed(random_seed)
+        env.action_space.seed(random_seed)
+        model = MuZeroTFModelV2(env.observation_space, env.action_space, CARTPOLE_DEFAULT_CONFIG)
+        obs = env.reset()
+        obs = np.expand_dims(obs, axis=0)
+        return eval_model(model, obs)
+
+
+    def eval_model(model: MuZeroTFModelV2, obs: np.ndarray):
+        hidden_state = model.representation_net(obs)
+        value1, policy1 = model.prediction_net(hidden_state)
+        value1 = model.expectation(value1, model.value_basis).numpy()[0]
+        policy1 = policy1.numpy()[0].tolist()
+        next_state, reward = model.dynamics(hidden_state, [action])
+        value2, policy2 = model.prediction_net(next_state)
+        value2 = model.expectation(value2, model.value_basis).numpy()[0]
+        reward = model.expectation(reward, model.reward_basis).numpy()[0]
+        policy2 = policy2.numpy()[0].tolist()
+        return hidden_state.numpy().tolist(), value1, policy1, reward, next_state.numpy().tolist(), value2, policy2
+
+    env = wrap_cartpole(gym.make('CartPole-v0'))
+
+    hidden_state1, value11, policy11, reward1, next_state1, value12, policy12 = one_run(env)
+    hidden_state2, value21, policy21, reward2, next_state2, value22, policy22 = one_run(env)
+
+    assert hidden_state1 == hidden_state2
+    assert next_state1 == next_state2
+    assert value11 == value21
+    assert policy11 == policy21
+    assert reward1 == reward2
+    assert value12 == value22
+    assert policy12 == policy22

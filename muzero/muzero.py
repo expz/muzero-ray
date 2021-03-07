@@ -202,6 +202,7 @@ ATARI_DEFAULT_CONFIG = config({
 })
 
 CARTPOLE_DEFAULT_CONFIG = config({
+    'random_seed': 1,
     'conv_filters': {
         'representation': [
             (1, 'fc', 256, None, None),

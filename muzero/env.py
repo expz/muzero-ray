@@ -221,7 +221,7 @@ class FrameStackWithAction1D(FrameStackWithAction):
             shape=(shp[0], (shp[1] + 1) * k),
             dtype=env.observation_space.dtype)
     
-def wrap_muzero(env, dim=96, framestack=32):
+def wrap_atari(env, dim=96, framestack=32):
     # This wrapper will be added in the RolloutWorker constructor.
     # env = MonitorEnv(env)
     env = NoopResetEnv(env, noop_max=30)
@@ -239,7 +239,7 @@ def wrap_cartpole(env, framestack=16):
     return env
 
 def register_atari_env(env_name: str, muzero_env_name: str, framestack=32):
-    tune.register_env(muzero_env_name, lambda ctx: wrap_muzero(gym.make(env_name), framestack=framestack))
+    tune.register_env(muzero_env_name, lambda ctx: wrap_atari(gym.make(env_name), framestack=framestack))
 
 def register_cartpole_env(env_name: str, muzero_env_name: str, framestack=16):
     tune.register_env(muzero_env_name, lambda ctx: wrap_cartpole(gym.make(env_name), framestack=framestack))

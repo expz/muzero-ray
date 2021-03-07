@@ -473,8 +473,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     #print('next id: ', self._tree.next_id, 'first priority:', priorities[0])
     assert len(idxes) == len(priorities)
     for idx, priority in zip(idxes, priorities):
-      if priority < MIN_ALLOWED_PRIORITY:
-        priority = MIN_ALLOWED_PRIORITY
+      if priority < self.min_allowed_priority:
+        priority = self.min_allowed_priority
       self._tree.update(idx, priority**self.alpha)
 
   def get_priorities(self, idxes):
