@@ -281,6 +281,7 @@ CARTPOLE_DEFAULT_CONFIG = config({
     'prioritized_replay_alpha': 1,
     'prioritized_replay_beta': 1,
     'prioritized_replay_eps': 1e-6,
+    'min_allowed_priority': 0.001,
     'mcts': {
         'reset_q_bounds_per_node': True,
         'add_dirichlet_noise': True,

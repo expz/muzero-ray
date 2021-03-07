@@ -14,17 +14,18 @@ make venv
 
 To run tests, run this command from the root directory of the repository:
 ```
+source venv/bin/activate
 pytest
 ```
 
-## Run
+## Run for breakout
 
 First, open up `run.py` and edit the ray configuration to have the amount of GPUs, CPUs and memory you would like. It is currently set to run on a 3 GPU machine with 12 cores and 64 GB of RAM.
 
 Then from the root directory of this repo, run
 ```
 source venv/bin/activate
-python run.py --logdir ./results --loglevel error breakout
+TF_CPP_MIN_LOG_LEVEL=2 python run.py --logdir ./results --loglevel error breakout
 ```
 
 Ray dashboard will be available at http://localhost:8265. If you are running the code on a server, then run `ssh -L 8265:localhost:8265 username@server` to make the dashboard available from your local machine.
