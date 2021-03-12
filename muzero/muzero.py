@@ -32,9 +32,9 @@ def config(conf: dict) -> dict:
     new_conf.update(conf)
     return new_conf
 
-
+# NOT IMPLEMENTED
 BOARD_DEFAULT_CONFIG = config({
-    'conv_filters': {
+    'architecture': {
         'representation': [
             (1, 'conv', 256, (3, 3), (1, 1)),
             (16, 'res', 256, (3, 3), (1, 1)),
@@ -99,7 +99,7 @@ BOARD_DEFAULT_CONFIG = config({
 })
 
 ATARI_DEFAULT_CONFIG = config({
-    'conv_filters': {
+    'architecture': {
         'representation': [
             (1, 'conv', 128, (3, 3), (2, 2)),
             (2, 'res', 128, (3, 3), (1, 1)),
@@ -203,24 +203,23 @@ ATARI_DEFAULT_CONFIG = config({
 
 CARTPOLE_DEFAULT_CONFIG = config({
     'random_seed': 1,
-    'conv_filters': {
+    'architecture': {
         'representation': [
-            (1, 'fc', 256, None, None),
-            (1, 'fc', 128, None, None),
+            (3, 'fc', 32, None, None),
         ],
         'dynamics': [
-            (3, 'fc', 128, None, None),
+            (3, 'fc', 32, None, None),
         ],
         'reward': [
-            (2, 'fc', 128, None, None),
+            (2, 'fc', 32, None, None),
         ],
         'prediction': [
         ],
         'value': [
-            (2, 'fc', 128, None, None),
+            (2, 'fc', 32, None, None),
         ],
         'policy': [
-            (2, 'fc', 128, None, None),
+            (2, 'fc', 32, None, None),
         ],
     },
     'action_type': 'atari',
@@ -231,7 +230,7 @@ CARTPOLE_DEFAULT_CONFIG = config({
     'reward_max': 3,
     'policy_type': 'fc',
     # Number of frames per model input
-    'input_steps': 16,
+    'input_steps': 4,
     # Number of channels per frame
     'n_channels': 2,
     'frame_shape': (4,),
@@ -239,14 +238,14 @@ CARTPOLE_DEFAULT_CONFIG = config({
     # The paper used 10, and 5 for the reanalyze version
     'n_step': 10,
     # The paper used 0.05 with batch size 1024
-    'lr': 4,
+    'lr': 0.005,
     'lr_schedule': None,
     'lr_cycle_length': 50000,
     # The paper used 0.9 with batch size 1024
     'momentum': 0.9,
     # The paper used 1e-4 with batch size 1024
     # 'l2_reg': 4e-5,
-    'l2_reg': 4e-4,
+    'l2_reg': 1e-2,
     'gamma': 0.997,
     # Apply invertible transform of value and reward model outputs.
     # The paper does this, but it is unclear whether I correctly implemented
@@ -259,7 +258,7 @@ CARTPOLE_DEFAULT_CONFIG = config({
     # The number of frames to generate before returning
     'replay_batch_size': 128,
     # The paper uses batch size of 1024
-    'train_batch_size': 1024,
+    'train_batch_size': 512,
     # The max number of observations the replay buffer can store.
     'buffer_size': 1000000,
     # If set, this will fix the ratio of replayed from a buffer and learned

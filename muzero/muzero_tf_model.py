@@ -34,7 +34,7 @@ class MuZeroTFModelV2:
 
         self.input_shape = obs_space.shape
         obs_input = tf.keras.Input(self.input_shape)
-        state_output = self._build_model(obs_input, model_config['conv_filters']['representation'])
+        state_output = self._build_model(obs_input, model_config['architecture']['representation'])
         self.representation_net = tf.keras.Model(obs_input, [state_output])
 
         self.state_shape = state_output.shape[1:]
@@ -53,14 +53,14 @@ class MuZeroTFModelV2:
         state_input = tf.keras.Input(self.state_shape)
         action_input = tf.keras.Input(self.action_shape)
         dynamics_input = tf.keras.layers.Concatenate(axis=-1)([state_input, action_input])
-        next_state_output = self._build_model(dynamics_input, model_config['conv_filters']['dynamics'])
-        reward_output = self._scalar_head(next_state_output, model_config['conv_filters']['reward'], model_config['reward_type'], model_config['reward_max'])
+        next_state_output = self._build_model(dynamics_input, model_config['architecture']['dynamics'])
+        reward_output = self._scalar_head(next_state_output, model_config['architecture']['reward'], model_config['reward_type'], model_config['reward_max'])
         self.dynamics_net = tf.keras.Model([state_input, action_input], [next_state_output, reward_output])
         
         prediction_input = tf.keras.Input(self.state_shape)
-        prediction_output = self._build_model(prediction_input, model_config['conv_filters']['prediction'])
-        value_output = self._scalar_head(prediction_output, model_config['conv_filters']['value'], model_config['value_type'], model_config['value_max'])
-        policy_output = self._policy_head(prediction_output, model_config['conv_filters']['policy'])
+        prediction_output = self._build_model(prediction_input, model_config['architecture']['prediction'])
+        value_output = self._scalar_head(prediction_output, model_config['architecture']['value'], model_config['value_type'], model_config['value_max'])
+        policy_output = self._policy_head(prediction_output, model_config['architecture']['policy'])
         self.prediction_net = tf.keras.Model(prediction_input, [value_output, policy_output])
         
         if model_config['value_type'] == 'categorical':
