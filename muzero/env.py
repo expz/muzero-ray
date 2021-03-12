@@ -1,3 +1,4 @@
+from abc import ABC
 from collections import deque
 
 import cv2
@@ -150,29 +151,33 @@ class ResizeFrame(gym.ObservationWrapper):
         frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
         return frame
 
-class FrameStackWithAction(gym.Wrapper):
+class FrameStackWithAction(gym.Wrapper, ABC):
     def __init__(self, env, k):
-        raise NotImplementedError('FrameStackWithAction is an abstract base class')
+        gym.Wrapper.__init__(self, env)
+        self.k = k
+        self.action_count = env.action_space.n
+        self.frames = deque([], maxlen=k)
+        self.channel_shape = None
+        self.frame_shape = None
     
     def _add_action(self, ob, action):
         """Add frame with constant value representing action. Notice the plus one."""
-        action_frame = np.empty(self.frame_shape)
+        action_frame = np.empty(self.channel_shape)
         action_frame.fill((action + 1) / self.action_count)
         if len(ob.shape) < len(action_frame.shape):
             ob = np.expand_dims(ob, axis=-1)
         return np.concatenate((ob, action_frame), axis=-1)
     
     def reset(self):
+        for _ in range(self.k - 1):
+            self.frames.append(np.zeros(self.frame_shape, dtype=np.int32))
         ob = self.env.reset()
-        ob = self._add_action(ob, self.action_space.sample())
-        for _ in range(self.k):
-            self.frames.append(ob)
+        self.frames.append(self._add_action(ob, -1))
         return self._get_ob()
     
     def step(self, action):
         ob, reward, done, info = self.env.step(action)
-        ob = self._add_action(ob, action)
-        self.frames.append(ob)
+        self.frames.append(self._add_action(ob, action))
         return self._get_ob(), reward, done, info
     
     def _get_ob(self):
@@ -181,13 +186,11 @@ class FrameStackWithAction(gym.Wrapper):
     
 class FrameStackWithAction2D(FrameStackWithAction):
     def __init__(self, env, k):
-        gym.Wrapper.__init__(self, env)
-        self.k = k
-        self.action_count = env.action_space.n
-        self.frames = deque([], maxlen=k)
+        FrameStackWithAction.__init__(self, env, k)
         shp = env.observation_space.shape
         shp = shp + (1,) if len(shp) == 2 else shp
-        self.frame_shape = (shp[0], shp[1], 1)
+        self.channel_shape = (shp[0], shp[1], 1)
+        self.frame_shape = (shp[0], shp[1], shp[2] + 1)
         low = env.observation_space.low
         high = env.observation_space.high
         if not np.isscalar(low):
@@ -201,14 +204,12 @@ class FrameStackWithAction2D(FrameStackWithAction):
             dtype=env.observation_space.dtype)
 
 class FrameStackWithAction1D(FrameStackWithAction):
-    def __init__(self, env, k, low=0, high=255):
-        gym.Wrapper.__init__(self, env)
-        self.k = k
-        self.action_count = env.action_space.n
-        self.frames = deque([], maxlen=k)
+    def __init__(self, env, k):
+        FrameStackWithAction.__init__(self, env, k)
         shp = env.observation_space.shape
         shp = shp + (1,) if len(shp) == 1 else shp
-        self.frame_shape = (shp[0], 1)
+        self.channel_shape = (shp[0], 1)
+        self.frame_shape = (shp[0], shp[1] + 1)
         low = env.observation_space.low
         high = env.observation_space.high
         if not np.isscalar(low):
@@ -234,8 +235,8 @@ def wrap_atari(env, dim=96, framestack=32):
     env = FrameStackWithAction2D(env, framestack)
     return env
 
-def wrap_cartpole(env, framestack=16):
-    env = FrameStackWithAction1D(env, framestack, low=env.observation_space.low)
+def wrap_cartpole(env, framestack=4):
+    env = FrameStackWithAction1D(env, framestack)
     return env
 
 def register_atari_env(env_name: str, muzero_env_name: str, framestack=32):
