@@ -46,7 +46,7 @@ def main(args):
             'num_cpus_per_worker': 1,
             'num_gpus_per_worker': 0.5,
             'memory_per_worker': 6 * 1024**3,  # 6 GiB
-            'object_store_memory_per_worker': 3 * 1024**3,  # 3 GiB
+            'object_store_memory_per_worker': 2.5 * 1024**3,  # 2.5 GiB
             'log_level': args.loglevel.upper(),
             'learning_starts': 512,
             'timesteps_per_iteration': 512,
@@ -61,12 +61,13 @@ def main(args):
     elif args.game == 'cartpole':
         config = {
             'env': 'CartPole-MuZero-v0',
-            'num_gpus': 1,
+            'num_cpus': 2,
+            'num_gpus': 0,
             'num_workers': 4,
             'num_cpus_per_worker': 1,
-            'num_gpus_per_worker': 0.5,
-            'memory_per_worker': 6 * 1024**3,  # 6 GiB
-            'object_store_memory_per_worker': 3 * 1024**3,  # 3 GiB
+            'num_gpus_per_worker': 0,
+            'memory_per_worker': 1 * 1024**3,  # 6 GiB
+            'object_store_memory_per_worker': 0.5 * 1024**3,  # 2.5 GiB
             'log_level': args.loglevel.upper(),
             'learning_starts': 256,
             'timesteps_per_iteration': 512,
