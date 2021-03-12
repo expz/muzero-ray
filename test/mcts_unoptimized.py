@@ -16,7 +16,7 @@ import tensorflow as tf
 
 from muzero.env import wrap_cartpole
 from muzero.muzero import CARTPOLE_DEFAULT_CONFIG
-from muzero.muzero_tf_model import MuZeroTFModelV2
+from muzero.tf_model import MuZeroTFModelV2
 
 
 MAXIMUM_FLOAT_VALUE = float('inf')

@@ -11,7 +11,7 @@ import tensorflow.keras.backend as K
 import tensorflow_probability as tfp
 
 from muzero.mcts import MCTS
-from muzero.muzero_tf_model import MuZeroTFModelV2
+from muzero.tf_model import MuZeroTFModelV2
 from muzero.policy import Policy, TFPolicy, traced_eager_policy, LEARNER_STATS_KEY, VALUE_TARGETS
 from muzero.replay_buffer import PRIO_WEIGHTS
 from muzero.sample_batch import SampleBatch
@@ -112,7 +112,7 @@ class MuZeroLoss:
         self.total_weighted_vf_loss = self.total_vf_loss * prio_weights
         self.weighted_vf_loss = tf.math.reduce_mean(self.total_weighted_vf_loss)
         self.weighted_policy_loss = tf.math.reduce_mean(self.total_policy_loss * prio_weights)
-        # self.loss = self.reward_loss + self.vf_loss + self.policy_loss + self.regularization
+        #self.loss = self.reward_loss + self.vf_loss + self.policy_loss + self.regularization
         self.loss = self.weighted_reward_loss + self.weighted_vf_loss + self.weighted_policy_loss + self.regularization
 
         return self.loss

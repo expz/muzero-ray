@@ -7,23 +7,8 @@ import pytest
 from muzero.env import wrap_cartpole
 from muzero.mcts import Node, RootNode, MCTS
 from muzero.muzero import CARTPOLE_DEFAULT_CONFIG
-from muzero.muzero_tf_model import MuZeroTFModelV2
+from muzero.tf_model import MuZeroTFModelV2
 
-"""
-import gym
-import numpy as np
-
-from muzero.env import wrap_cartpole
-from muzero.mcts import Node, RootNode, MCTS
-from muzero.muzero import CARTPOLE_DEFAULT_CONFIG
-from muzero.muzero_tf_model import MuZeroTFModelV2
-
-config = CARTPOLE_DEFAULT_CONFIG
-env = wrap_cartpole(gym.make('CartPole-v0'))
-model = MuZeroTFModelV2(env.observation_space, env.action_space, cartpole_config)
-mcts = MCTS(cartpole_model, cartpole_config)
-
-"""
 
 @pytest.fixture()
 def cartpole_config():

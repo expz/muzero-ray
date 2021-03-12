@@ -23,7 +23,7 @@ import tensorflow as tf
 from muzero.global_vars import GlobalVars
 from muzero.learner_thread import LearnerThread
 from muzero.muzero import ATARI_DEFAULT_CONFIG, BOARD_DEFAULT_CONFIG
-from muzero.muzero_tf_policy import MuZeroTFPolicy
+from muzero.tf_policy import MuZeroTFPolicy
 from muzero.ops.concurrency_ops import Concurrently, Enqueue, Dequeue
 from muzero.ops.metric_ops import StandardMetricsReporting
 from muzero.ops.replay_ops import Replay, StoreToReplayBuffer, CalculatePriorities
