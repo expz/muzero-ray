@@ -11,6 +11,7 @@ import typing
 from typing import Any, Dict, List, Optional
 
 import numpy
+import pytest
 import tensorflow as tf
 
 from muzero.env import wrap_cartpole
@@ -344,9 +345,9 @@ def expand_node(node: Node, to_play: Player, actions: List[Action],
   node.hidden_state = network_output.hidden_state
   node.reward = network_output.reward
   policy = network_output.policy
-  policy_sum = sum(policy.values())
+  assert pytest.approx(1) == sum(policy.values())
   for action, p in policy.items():
-    node.children[action] = Node(p / policy_sum)
+    node.children[action] = Node(p)
 
 
 # At the end of a simulation, we propagate the evaluation all the way up the
