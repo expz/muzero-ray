@@ -39,6 +39,8 @@ def main(args):
     coloredlogs.install(level=args.loglevel.upper())
 
     if args.game == 'breakout':
+        num_cpus = 6
+        num_gpus = 3
         config = {
             'env': 'BreakoutNoFrameskip-MuZero-v1',
             'num_gpus': 1,
@@ -59,6 +61,8 @@ def main(args):
         config = update_config(ATARI_DEFAULT_CONFIG, config)
         register_atari_env('BreakoutNoFrameskip-v4', 'BreakoutNoFrameskip-MuZero-v1', framestack=config['input_steps'])
     elif args.game == 'cartpole':
+        num_cpus = 5
+        num_gpus = 0
         config = {
             'env': 'CartPole-MuZero-v0',
             'num_cpus': 2,
@@ -66,8 +70,8 @@ def main(args):
             'num_workers': 4,
             'num_cpus_per_worker': 1,
             'num_gpus_per_worker': 0,
-            'memory_per_worker': 1 * 1024**3,  # 6 GiB
-            'object_store_memory_per_worker': 0.5 * 1024**3,  # 2.5 GiB
+            'memory_per_worker': 0.5 * 1024**3,  # 0.5 GiB
+            'object_store_memory_per_worker': 0.5 * 1024**3,  # 0.5 GiB
             'log_level': args.loglevel.upper(),
             'learning_starts': 256,
             'timesteps_per_iteration': 512,
@@ -89,8 +93,8 @@ def main(args):
 
     #ray.init(local_mode=True)
     ray.init(
-        num_cpus=6,
-        num_gpus=3,
+        num_cpus=num_cpus,
+        num_gpus=num_gpus,
         #object_store_memory=20 * 1024**3,
         #_redis_max_memory=5 * 1024**3,
         #_memory=25 * 1024**3
