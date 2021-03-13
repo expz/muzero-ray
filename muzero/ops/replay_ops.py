@@ -27,11 +27,11 @@ class CalculatePriorities:
             else:
                 observed_return += b[SampleBatch.VF_PREDS][k]
             q.put((b, k))
-        #print('search_value', search_value, 'observed_return', observed_return, 'gamma', self.gamma)
         b, k = q.get_nowait()
         search_value = b[SampleBatch.VF_PREDS][k]
         b_frame = b.slice(k, k + 1)
         b_frame[PRIORITIES] = [abs(search_value - observed_return)]
+        b_frame[SampleBatch.VF_PREDS] = [observed_return]
         return b_frame
 
     def __call__(self, batch: SampleBatch):
@@ -43,7 +43,7 @@ class CalculatePriorities:
         for i, eps_id in enumerate(batch[SampleBatch.EPS_ID]):
             if eps_id not in self.episodes:
                 assert not batch[SampleBatch.DONES][i]
-                self.episodes[eps_id] = queue.Queue(maxsize=10)
+                self.episodes[eps_id] = queue.Queue(maxsize=self.n)
             q = self.episodes[eps_id]
             q.put_nowait((batch, i))
             if batch[SampleBatch.DONES][i]:
