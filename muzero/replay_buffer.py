@@ -322,7 +322,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
       p = self._tree.max if self._tree.max else 1
     else:
       assert p >= 0
-    priority = np.pow(p, self.alpha) if self.alpha != 1 else p
+    priority = np.power(p, self.alpha) if self.alpha != 1 else p
     id_ = self._tree.next_id
     overwritten = self._tree.add(episode, step, priority)
     if overwritten is not None:
